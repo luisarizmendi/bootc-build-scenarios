@@ -3,7 +3,6 @@ set -e
 
 # Default values
 ARCH=""  # Empty by default - will be detected from system if not specified
-ENTITLEMENTS_DIR="$HOME/.rh-entitlements"
 CONTAINERFILE="Containerfile"
 CONTEXT="."
 IMAGE=""
@@ -15,7 +14,6 @@ usage() {
     echo "OPTIONS:"
     echo "  -i IMAGE             Container image name (required)"
     echo "  -a ARCH              Architecture (default: system architecture)"
-    echo "  -e ENTITLEMENTS_DIR  Path to entitlements directory (default: ~/.rh-entitlements)"
     echo "  -f CONTAINERFILE     Path to Containerfile (default: Containerfile)"
     echo "  -c CONTEXT           Build context directory (default: .)"
     echo "  -h                   Show this help message"
@@ -49,7 +47,7 @@ detect_arch() {
     esac
 }
 
-while getopts "i:a:e:s:f:c:t:Ph" opt; do
+while getopts "i:a:s:f:c:t:Ph" opt; do
     case $opt in
         i)
             IMAGE="$OPTARG"
@@ -57,9 +55,6 @@ while getopts "i:a:e:s:f:c:t:Ph" opt; do
         a)
             ARCH="$OPTARG"
             ARCH_SPECIFIED=true
-            ;;
-        e)
-            ENTITLEMENTS_DIR="$OPTARG"
             ;;
         f)
             CONTAINERFILE="$OPTARG"
@@ -95,7 +90,6 @@ if [ -z "$ARCH" ]; then
     ARCH=$(detect_arch)
 fi
 
-ENTITLEMENTS_DIR="${ENTITLEMENTS_DIR/#\~/$HOME}"
 CONTAINERFILE="${CONTAINERFILE/#\~/$HOME}"
 CONTEXT="${CONTEXT/#\~/$HOME}"
 
@@ -114,7 +108,6 @@ fi
 echo "Image: $IMAGE"
 echo "Containerfile: $CONTAINERFILE"
 echo "Build context: $CONTEXT"
-echo "Entitlements directory: ${ENTITLEMENTS_DIR}/${ARCH}"
 echo "-------------------------"
 echo ""
 
@@ -127,18 +120,6 @@ fi
 
 if [ ! -d "$CONTEXT" ]; then
     echo "Error: Build context directory not found at $CONTEXT"
-    exit 1
-fi
-
-if [ ! -d "${ENTITLEMENTS_DIR}/${ARCH}" ]; then
-    echo "Error: Entitlements directory not found at ${ENTITLEMENTS_DIR}/${ARCH}"
-    echo "Please run the entitlements script first to generate entitlements for $ARCH"
-    exit 1
-fi
-
-if [ -z "$(ls -A "${ENTITLEMENTS_DIR}/${ARCH}")" ]; then
-    echo "Error: Entitlements directory is empty at ${ENTITLEMENTS_DIR}/${ARCH}"
-    echo "Please run the entitlements script first to generate entitlements for $ARCH"
     exit 1
 fi
 
@@ -169,18 +150,11 @@ if [ "$ARCH_SPECIFIED" = true ]; then
     PODMAN_CMD="$PODMAN_CMD --platform linux/$ARCH"
 fi
 
-PODMAN_CMD="$PODMAN_CMD -f $CONTAINERFILE -t $IMAGE -v ${ENTITLEMENTS_DIR}/${ARCH}:/run/secrets:z $CONTEXT"
+PODMAN_CMD="$PODMAN_CMD -f $CONTAINERFILE -t $IMAGE $CONTEXT"
 
 echo "$PODMAN_CMD"
 
 eval "$PODMAN_CMD"
-# podman build \
-#     --platform "linux/$ARCH" \
-#     -f "$CONTAINERFILE" \
-#     -t "$IMAGE" \
-#     -v "${ENTITLEMENTS_DIR}/${ARCH}:/run/secrets:z" \
-#     "$CONTEXT"
-
 
 echo "Build completed successfully!"
 echo "Image tagged as: $IMAGE"
