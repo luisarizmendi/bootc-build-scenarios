@@ -203,19 +203,32 @@ fi
 
 # Check if image is already pulled
 if sudo podman image exists "$IMAGE"; then
-  echo "Image $IMAGE already exists locally, skipping login and pull."
+  echo "Image $IMAGE already exists locally — no need to pull."
 else
-  # Registry login
-  echo "Checking registry login"
-  if sudo podman login --get-login "${IMAGE%%/*}" &>/dev/null; then
-    echo "Already logged in to ${IMAGE%%/*} as $(sudo podman login --get-login "${IMAGE%%/*}")"
+  # Try pulling directly (anonymous/public access)
+  echo "Attempting to pull $IMAGE (anonymous/public pull)..."
+  if sudo podman pull --quiet --platform linux/$ARCH "$IMAGE"; then
+    echo "Successfully pulled $IMAGE without login."
   else
-    echo "Not logged in to ${IMAGE%%/*}!"
-    sudo podman login "${IMAGE%%/*}"
-  fi
+    echo "Failed to pull $IMAGE anonymously. Trying with registry login..."
 
-  # Pull the image
-  sudo podman pull --platform linux/$ARCH "$IMAGE"
+    # Try logging in—prompt or use credentials
+    REGISTRY_HOST="${IMAGE%%/*}"
+    if sudo podman login --get-login "$REGISTRY_HOST" &>/dev/null; then
+      echo "Already logged in to $REGISTRY_HOST."
+    else
+      # Prompt for credentials interactively, or read from env vars
+      echo "Logging in to $REGISTRY_HOST..."
+      read -p "Registry username: " USERNAME
+      read -s -p "Registry password: " PASSWORD
+      echo
+      sudo podman login -u "$USERNAME" -p "$PASSWORD" "$REGISTRY_HOST"
+    fi
+
+    # Retry pull with credentials
+    echo "Retrying pull with login..."
+    sudo podman pull --platform linux/$ARCH "$IMAGE"
+  fi
 fi
 
 
