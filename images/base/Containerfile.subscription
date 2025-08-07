@@ -11,20 +11,11 @@ RUN --mount=type=secret,id=username \
     grep -o 'system name is: [a-f0-9-]*' /tmp/register_output | cut -d' ' -f4 > /etc/rhsm/host_id && \
     rm -f /tmp/register_output
 
-RUN dnf -y copr enable @redhat-et/flightctl && \
-    dnf -y install flightctl-agent && \
-    dnf -y clean all && \
-    systemctl enable flightctl-agent.service && \
-    systemctl mask bootc-fetch-apply-updates.timer
 
-# Optional: To enable podman-compose application support, uncomment below
- RUN dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
-     dnf -y install podman-compose && \
-     dnf -y clean all && \
-     rm -rf /var/{cache,log} /var/lib/{dnf,rhsm} && \
-     systemctl enable podman.service
-
-#ADD config.yaml /etc/flightctl/
+## Install base packages
+RUN dnf -y install tmux python3-pip && \
+    pip3 install podman-compose && \
+    dnf clean all
 
 # Clean-up and unregistering
 RUN --mount=type=secret,id=username \

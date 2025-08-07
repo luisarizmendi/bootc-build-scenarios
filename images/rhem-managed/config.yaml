@@ -1,0 +1,11 @@
+enrollment-service:
+  authentication:
+    client-certificate-data: <cert data>
+    client-key-data: <key data>
+  enrollment-ui-endpoint: <rhem ui url>
+  service:
+    certificate-authority-data: <ca data>
+    server: <rhem agent-api url>
+management-service:
+  authentication: {}
+  service: {}
