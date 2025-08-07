@@ -1,0 +1,253 @@
+
+###
+#
+# NOTE: Change in "TriggerBinding" the  "registry" value with the registry where you will push your bootc image
+#
+##
+
+
+apiVersion: triggers.tekton.dev/v1alpha1
+kind: EventListener
+metadata:
+  name: bootc-folder-filter-listener
+  namespace: tools-rhel-image
+spec:
+  serviceAccountName: pipeline
+  triggers:
+  - name: bootc-trigger
+    interceptors:
+    # CEL interceptor for filtering events only
+    - ref:
+        name: "cel"
+        kind: ClusterInterceptor
+        apiVersion: triggers.tekton.dev
+      params:
+      - name: "filter"
+        value: "header.canonical('X-GitHub-Event') == 'push'"
+    bindings:
+    - ref: bootc-pipeline-binding
+    template:
+      ref: bootc-pipeline-template
+
+---
+apiVersion: triggers.tekton.dev/v1alpha1
+kind: TriggerBinding
+metadata:
+  name: bootc-pipeline-binding
+  namespace: tools-rhel-image
+spec:
+  params:
+  - name: git-revision
+    value: $(body.after)
+  - name: git-revision-short
+    value: $(body.after[:7])
+  - name: git-repo-url
+    value: $(body.repository.clone_url)
+  - name: git-repo-name
+    value: $(body.repository.name)
+    #### CHANGE THE VALUE BELOW !!!!!!!!!!!!!!!!!!!!!!!!
+  - name: registry
+    value: quay.io/luisarizmendi
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: bootc-folder-filter-webhook
+  namespace: tools-rhel-image
+spec:
+  to:
+    kind: Service
+    name: el-bootc-folder-filter-listener
+  port:
+    targetPort: http-listener
+  tls:
+    termination: edge
+
+---
+apiVersion: triggers.tekton.dev/v1alpha1
+kind: TriggerTemplate
+metadata:
+  name: bootc-pipeline-template
+  namespace: tools-rhel-image
+spec:
+  params:
+  - name: git-revision
+    description: The git revision
+  - name: git-revision-short
+    description: The git revision short
+    default: latest
+  - name: git-repo-url
+    description: The git repository url
+  - name: git-repo-name
+    description: The git repository name
+  - name: registry
+    description: The registry name where the bootc image will be pushed (ie. quay.io/luisarizmendi)
+  resourcetemplates:
+  - apiVersion: tekton.dev/v1
+    kind: PipelineRun
+    metadata:
+      generateName: bootc-build-$(tt.params.git-repo-name)-$(tt.params.git-revision-short)-
+      namespace: tools-rhel-image
+      labels:
+        tekton.dev/pipeline: bootc-image-build-multiarch
+    spec:
+      params:
+        - name: bootc-build-files-repo-url
+          value: $(tt.params.git-repo-url)
+        - name: bootc-build-files-repo-branch
+          value: main
+        - name: bootc-build-files-repo-subpath
+          value: .
+        - name: bootc-image-name
+          value: '$(tt.params.registry)/$(tt.params.git-repo-name):$(tt.params.git-revision-short)'
+        - name: bootc-build-export-formats
+          value:
+            - anaconda-iso
+            #- qcow2
+        - name: bootc-build-platforms
+          value:
+            - linux/amd64
+            #- linux/arm64
+        - name: skip-build
+          value: 'false'
+      pipelineRef:
+        name: bootc-image-build-multiarch
+      taskRunTemplate:
+        serviceAccountName: pipeline
+      timeouts:
+        pipeline: 2h0m0s
+      taskRunSpecs:
+        # ARM64 tasks — prefer arm64 nodes
+        - pipelineTaskName: gather-rh-entitlements-arm64
+          podTemplate:
+            affinity:
+              nodeAffinity:
+                preferredDuringSchedulingIgnoredDuringExecution:
+                  - weight: 100
+                    preference:
+                      matchExpressions:
+                        - key: kubernetes.io/arch
+                          operator: In
+                          values:
+                            - arm64
+            tolerations:
+              - key: "node.kubernetes.io/arch"
+                operator: "Equal"
+                value: "arm64"
+                effect: "NoSchedule"
+        - pipelineTaskName: build-arm64
+          podTemplate:
+            affinity:
+              nodeAffinity:
+                preferredDuringSchedulingIgnoredDuringExecution:
+                  - weight: 100
+                    preference:
+                      matchExpressions:
+                        - key: kubernetes.io/arch
+                          operator: In
+                          values:
+                            - arm64
+            tolerations:
+              - key: "node.kubernetes.io/arch"
+                operator: "Equal"
+                value: "arm64"
+                effect: "NoSchedule"
+        - pipelineTaskName: export-arm64-iso
+          podTemplate:
+            affinity:
+              nodeAffinity:
+                preferredDuringSchedulingIgnoredDuringExecution:
+                  - weight: 100
+                    preference:
+                      matchExpressions:
+                        - key: kubernetes.io/arch
+                          operator: In
+                          values:
+                            - arm64
+            tolerations:
+              - key: "node.kubernetes.io/arch"
+                operator: "Equal"
+                value: "arm64"
+                effect: "NoSchedule"
+        - pipelineTaskName: export-arm64-qcow2
+          podTemplate:
+            affinity:
+              nodeAffinity:
+                preferredDuringSchedulingIgnoredDuringExecution:
+                  - weight: 100
+                    preference:
+                      matchExpressions:
+                        - key: kubernetes.io/arch
+                          operator: In
+                          values:
+                            - arm64
+            tolerations:
+              - key: "node.kubernetes.io/arch"
+                operator: "Equal"
+                value: "arm64"
+                effect: "NoSchedule"
+        - pipelineTaskName: export-arm64-vmdk
+          podTemplate:
+            affinity:
+              nodeAffinity:
+                preferredDuringSchedulingIgnoredDuringExecution:
+                  - weight: 100
+                    preference:
+                      matchExpressions:
+                        - key: kubernetes.io/arch
+                          operator: In
+                          values:
+                            - arm64
+            tolerations:
+              - key: "node.kubernetes.io/arch"
+                operator: "Equal"
+                value: "arm64"
+                effect: "NoSchedule"
+        - pipelineTaskName: export-arm64-raw
+          podTemplate:
+            affinity:
+              nodeAffinity:
+                preferredDuringSchedulingIgnoredDuringExecution:
+                  - weight: 100
+                    preference:
+                      matchExpressions:
+                        - key: kubernetes.io/arch
+                          operator: In
+                          values:
+                            - arm64
+            tolerations:
+              - key: "node.kubernetes.io/arch"
+                operator: "Equal"
+                value: "arm64"
+                effect: "NoSchedule"
+      workspaces:
+        - name: shared-git-repo
+          persistentVolumeClaim:
+            claimName: bootc-build-git-repo
+        - name: rh-entitlements
+          persistentVolumeClaim:
+            claimName: bootc-build-entitlements
+        - name: shared-container-storage
+          persistentVolumeClaim:
+            claimName: bootc-build-conatiner-storage
+        - name: redhat-registry-secret
+          secret:
+            secretName: redhat-registry-secret
+        - name: push-registry-secret
+          secret:
+            secretName: push-registry-secret
+        - emptyDir: {}
+          name: bootc-exports
+        - emptyDir: {}
+          name: store-amd64
+        - emptyDir: {}
+          name: rpmmd-amd64
+        - emptyDir: {}
+          name: varlibcontainerstorage-amd64
+        - emptyDir: {}
+          name: store-arm64
+        - emptyDir: {}
+          name: rpmmd-arm64
+        - emptyDir: {}
+          name: varlibcontainerstorage-arm64

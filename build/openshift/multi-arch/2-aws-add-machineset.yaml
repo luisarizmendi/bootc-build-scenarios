@@ -1,0 +1,102 @@
+###############
+## https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/postinstallation_configuration/configuring-multi-architecture-compute-machines-on-an-openshift-cluster#creating-multi-arch-compute-nodes-aws
+
+# Put the right AMI in "<REPLACE_WITH_ARM64_AMI_ID>". You can get the list with oc:
+#
+# oc get configmap/coreos-bootimages \
+#	  -n openshift-machine-config-operator \
+#	  -o jsonpath='{.data.stream}' | jq \
+#	  -r '.architectures.<arch>.images.aws.regions."<region>".image'
+#
+# For example: oc get configmap/coreos-bootimages -n openshift-machine-config-operator -o jsonpath='{.data.stream}' | jq -r '.architectures.aarch64.images.aws.regions."us-east-2".image'
+#  ->  it will get output: ami-0b04071739ccf4af2
+# 
+################
+
+
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: create-machineset
+  namespace: openshift
+spec:
+  template:
+    spec:
+      serviceAccountName: scc-admin
+      restartPolicy: Never
+      containers:
+      - name: create-machineset
+        image: quay.io/luisarizmendi/ocp-job:latest
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -e
+
+          ##########################################
+          #             REPLACE THIS !
+          ##########################################
+          
+          export AMI_ID="<REPLACE_WITH_ARM64_AMI_ID>"
+
+          ##########################################
+          #          Change it if you want
+          ##########################################
+
+          export NAME_SUFFIX="build-arm64"
+
+          export TYPE="m6g.large"
+          export ARCH="arm64"          
+          export GPU="0"
+          export MEMORY_MB="8192"
+          export VCPU="2"
+          
+          ##########################################
+          ##########################################
+          echo "Finding a base MachineSet..."
+          BASE_MS=$(oc get machinesets.machine.openshift.io -n openshift-machine-api -o name | head -n 1)
+          echo "Using base MachineSet: $BASE_MS"
+
+          echo "Exporting and modifying MachineSet..."
+          oc get $BASE_MS -n openshift-machine-api -o yaml > /tmp/base-machineset.yaml
+
+          REGION=$(oc get infrastructure cluster -o jsonpath='{.status.platformStatus.aws.region}')
+
+          BASE_NAME=$(basename $BASE_MS)
+          NEW_NAME="${BASE_NAME%-*}-$NAME_SUFFIX"
+
+          cp /tmp/base-machineset.yaml /tmp/new-machineset.yaml
+
+          sed -i "s/^  name: $BASE_NAME/  name: $NEW_NAME/" /tmp/new-machineset.yaml
+          sed -i "s/machine.openshift.io\/cluster-api-machineset: $BASE_NAME/machine.openshift.io\/cluster-api-machineset: $NEW_NAME/g" /tmp/new-machineset.yaml
+          sed -i "s/^\([[:space:]]*id:[[:space:]]*\)ami-.*/\1$AMI_ID/" /tmp/new-machineset.yaml
+          sed -i "s/^\([[:space:]]*capacity\.cluster-autoscaler\.kubernetes\.io\/labels:[[:space:]]*kubernetes\.io\/arch=\).*/\1$ARCH/" /tmp/new-machineset.yaml
+          sed -i "s/instanceType: .*/instanceType: $TYPE/" /tmp/new-machineset.yaml
+          sed -i 's/^\([[:space:]]*replicas:[[:space:]]*\)[0-9]\+/\11/' /tmp/new-machineset.yaml
+          sed -i "s/^\([[:space:]]*machine.openshift.io\/GPU:[[:space:]]*'\)[^']*'/\1$GPU'/" /tmp/new-machineset.yaml
+          sed -i "s/^\([[:space:]]*machine.openshift.io\/memoryMb:[[:space:]]*'\)[^']*'/\1$MEMORY_MB'/" /tmp/new-machineset.yaml
+          sed -i "s/^\([[:space:]]*machine.openshift.io\/vCPU:[[:space:]]*'\)[^']*'/\1$VCPU'/" /tmp/new-machineset.yaml
+
+          # Taints
+          sed -i '/template:/,/spec:/ {
+            /spec:/a\
+                taints:\
+                - effect: NoSchedule\
+                  key: node.kubernetes.io/arch\
+                  value: arm64
+          }' /tmp/new-machineset.yaml
+
+          echo "Creating this object:"
+          cat /tmp/new-machineset.yaml
+
+          echo "Creating new MachineSet: $NEW_NAME"
+          oc apply -f /tmp/new-machineset.yaml
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
+  backoffLimit: 1

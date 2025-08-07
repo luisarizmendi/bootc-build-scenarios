@@ -1,0 +1,28 @@
+FROM registry.fedoraproject.org/fedora-minimal:latest
+
+RUN microdnf install -y \
+        bash \
+        skopeo \
+        jq \
+        coreutils \
+        tar \
+        gzip \
+        && microdnf clean all
+
+RUN useradd -m -u 1000 extractor
+
+WORKDIR /usr/local/bin
+
+COPY extract-oci-diskimage.sh .
+
+RUN chmod +x extract-oci-diskimage.sh && \
+    mkdir -p /output && \
+    chown extractor:extractor /output && \
+    mkdir -p /home/extractor/.config/containers && \
+    chown extractor:extractor /home/extractor/.config/containers
+
+VOLUME ["/output"]
+
+USER extractor
+
+ENTRYPOINT ["/usr/local/bin/extract-oci-diskimage.sh"]

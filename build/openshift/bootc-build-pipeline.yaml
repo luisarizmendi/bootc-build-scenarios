@@ -1,0 +1,1413 @@
+###
+#
+# NOTE: You will also need ReadWriteMany volumes. In order to simplify that you can create an nfs-csi storage class
+#       with the manifests that you can find in the "nfs-storage" directory. If you already have another storage class
+#       with that capability, change the "storageClassName" definition in the manifests below with your storage class name.
+#
+##
+
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tools-rhel-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bootc-build-git-repo
+  namespace: tools-rhel-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  storageClassName: nfs-csi
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bootc-build-conatiner-storage
+  namespace: tools-rhel-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  storageClassName: nfs-csi
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 15Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bootc-build-entitlements
+  namespace: tools-rhel-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  storageClassName: nfs-csi
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 100Mi
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: custom-containers-conf
+  namespace: tools-rhel-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  containers.conf: |
+    [engine]
+    num_locks = 10240
+
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: gather-rh-entitlements
+  namespace: tools-rhel-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  params:
+    - name: PLATFORM
+      description: Target platform (e.g., linux/amd64)
+    - name: CONTEXT
+      description: Build context
+      default: ./
+  workspaces:
+    - name: source
+    - name: rh-entitlements
+      mountPath: /root/redhat-entitlements
+    - name: redhat-registry-secret
+      optional: true
+      mountPath: /root/redhat-registry-secret
+  steps:
+    - name: gather-entitlements
+      image: registry.redhat.io/rhel9/bootc-image-builder:latest
+      securityContext:
+        privileged: true
+        runAsUser: 0
+        seLinuxOptions:
+          type: container_file_t
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/bash
+        set -e
+        
+        PLATFORM="$(params.PLATFORM)"
+        ARCH="${PLATFORM##*/}"
+        DIR="/root/redhat-entitlements/${ARCH}"
+        
+        echo "Checking entitlements for platform: $(params.PLATFORM)"
+        echo "Architecture: $ARCH"
+        echo "Entitlements directory: $DIR"
+        
+        # Check if entitlements already exist
+        if [ -d "$DIR" ] && find "$DIR" -mindepth 1 -maxdepth 1 -type f | grep -q .; then
+          echo "Entitlements already exist for $ARCH"
+          exit 0
+        fi
+        
+        if [ ! -d "/root/redhat-registry-secret" ]; then
+          echo "Red Hat pull-secret not found; skipping entitlement gathering"
+          exit 0
+        else
+          echo "Extracting username and password from pull secret"
+          decoded_json=$(cat /root/redhat-registry-secret/.dockerconfigjson)
+          auth=$(echo "$decoded_json" | sed -n 's/.*"registry.redhat.io":{"username":"[^"]*","password":"[^"]*","auth":"\([^"]*\)".*/\1/p')
+          credentials=$(echo "$auth" | base64 -d)
+          username=$(echo "$credentials" | cut -d: -f1)
+          password=$(echo "$credentials" | cut -d: -f2-)
+          mkdir -p /tmp/redhat-credentials
+          echo "$username" > /tmp/redhat-credentials/username
+          echo "$password" > /tmp/redhat-credentials/password
+        fi
+        
+        echo "Enabling binfmt_misc for cross-arch builds..."
+        podman run --rm --privileged docker.io/multiarch/qemu-user-static --reset -p yes 2>/dev/null || echo "binfmt setup completed (some handlers may have already existed)"
+        
+        echo "Getting entitlements for $ARCH..."
+        
+        # Find FROM image
+        for file in $(params.CONTEXT)/Dockerfile $(params.CONTEXT)/Containerfile; do
+          if [[ -f "$file" ]]; then
+            from_line=$(grep -E '^FROM ' "$file")
+            if [[ -n "$from_line" ]]; then
+              export FROM_IMAGE=$(echo "$from_line" | awk '{print $2}')
+              echo "Base image found in $file: $FROM_IMAGE"
+              break
+            fi
+          fi
+        done
+        
+        if [[ -z "$FROM_IMAGE" ]]; then
+          echo "FROM statement not found in Dockerfile or Containerfile"
+          exit 1
+        fi
+
+        cat <<EOF > Containerfile.subs
+        FROM $FROM_IMAGE
+        RUN if [ -f /run/secrets/username ] && [ -f /run/secrets/password ]; then \
+            echo "Registering with Red Hat subscription manager..."  && rm -rf /etc/rhsm-host && subscription-manager register --username \$(cat /run/secrets/username) --password \$(cat /run/secrets/password) | tee /tmp/register_output && echo \$(grep -o 'ID: [a-f0-9-]*' /tmp/register_output | cut -d' ' -f2) > /etc/rhsm/system_id && echo \$(grep -o 'system name is: [a-f0-9-]*' /tmp/register_output | cut -d' ' -f4) > /etc/rhsm/host_id && rm -f /tmp/register_output ; \
+            else \
+            echo "Red Hat credentials not found; skipping subscription registration."; \
+            fi
+        RUN dnf -y --nogpgcheck install curl jq && dnf clean all
+        RUN mkdir -p /entitlements && cp -a /etc/pki/entitlement/* /entitlements/
+        RUN if [ -f /run/secrets/username ] && [ -f /run/secrets/password ]; then \
+            echo "Unregistering from Red Hat Cloud inventory..." && for uuid in \$(curl -s -u "\$(cat /run/secrets/username):\$(cat /run/secrets/password)" https://cloud.redhat.com/api/inventory/v1/hosts?fqdn=\$(cat /etc/rhsm/host_id) | grep -o '"id":"[^"]*' | grep -o '[^"]*\$') ; do curl -u "\$(cat /run/secrets/username):\$(cat /run/secrets/password)" -X DELETE https://cloud.redhat.com/api/inventory/v1/hosts/\$uuid -H  "accept: */*" ;done && subscription-manager unregister && subscription-manager clean && ln -s /run/secrets/rhsm /etc/rhsm-host; \
+            else \
+            echo "Red Hat credentials not found; skipping subscription clean-up."; \
+            fi
+        EOF
+        
+        echo "Building entitlement container for $ARCH..."
+        mkdir -p entitlements/$ARCH
+        podman build -f Containerfile.subs \
+          --authfile /root/redhat-registry-secret/.dockerconfigjson \
+          --volume /tmp/redhat-credentials:/run/secrets:ro \
+          --platform $ARCH \
+          -t local-$ARCH .
+          
+        CONTAINER_ID=$(podman create local-$ARCH)
+        podman cp ${CONTAINER_ID}:/entitlements/. entitlements/$ARCH/
+        podman rm ${CONTAINER_ID}
+        podman rmi local-$ARCH
+        
+        mkdir -p "$DIR"
+        cp -r entitlements/$ARCH/* "$DIR"
+        
+        echo "Entitlements gathered for $ARCH:"
+        ls -la "$DIR"
+
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: bootc-build
+  namespace: tools-rhel-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  params:
+    - name: IMAGE
+      description: Full image name including registry
+    - name: PLATFORM
+      description: Target platform (e.g., linux/amd64)
+    - name: CONTAINERFILE
+      description: Path to Containerfile
+      default: ./Containerfile
+    - name: CONTEXT
+      description: Build context
+      default: ./
+  workspaces:
+    - name: source
+    - name: rh-entitlements
+      optional: true
+      mountPath: /root/rh-entitlements
+    - name: redhat-registry-secret
+      optional: true
+      mountPath: /root/redhat-registry-secret
+    - name: push-registry-secret
+      optional: true
+      mountPath: /root/push-registry-secret
+    - name: store
+      mountPath: /store
+    - name: rpmmd
+      mountPath: /rpmmd
+    - name: varlibcontainerstorage
+      mountPath: /var/lib/containers/storage
+    - name: shared-container-storage
+      mountPath: /shared-containers
+  steps:
+    - name: build-and-push
+      image: registry.redhat.io/rhel9/bootc-image-builder:latest
+      securityContext:
+        privileged: true
+        runAsUser: 0
+        seLinuxOptions:
+          type: container_file_t
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/bash
+        set -e
+        
+        export IMAGE=$(params.IMAGE)
+        IMAGE="${IMAGE#http://}"
+        IMAGE="${IMAGE#https://}"
+        IMAGE="${IMAGE//\/\//\/}"
+        
+        PLATFORM="$(params.PLATFORM)"
+        ARCH="${PLATFORM##*/}"
+        TAG="${ARCH//\//-}"
+        IMAGE_WITH_ARCH_TAG="$IMAGE-$TAG"
+        
+        echo "Building for platform: $(params.PLATFORM)"
+        echo "Architecture: $ARCH"
+        echo "Image with arch tag: $IMAGE_WITH_ARCH_TAG"
+        
+        echo "Enabling binfmt_misc for cross-arch builds..."
+        podman run --rm --privileged docker.io/multiarch/qemu-user-static --reset -p yes 2>/dev/null || echo "binfmt setup completed (some handlers may have already existed)"
+        
+        echo "Moving entitlements for $ARCH..."
+        mkdir -p /etc/pki/entitlement
+        find $(workspaces.rh-entitlements.path)/$ARCH/ -type f -exec cp {} /etc/pki/entitlement \; 2>/dev/null || true
+        
+        echo "Building image for $ARCH..."
+        podman build \
+          --authfile /root/redhat-registry-secret/.dockerconfigjson \
+          --platform $ARCH \
+          -f $(params.CONTAINERFILE) \
+          -t $IMAGE_WITH_ARCH_TAG \
+          $(params.CONTEXT)
+        
+        echo "Pushing image: $IMAGE_WITH_ARCH_TAG"
+        podman push --authfile=/root/push-registry-secret/.dockerconfigjson $IMAGE_WITH_ARCH_TAG
+        
+        echo "Saving image to shared storage..."
+        mkdir -p /shared-containers
+
+        SAFE_FILENAME=$(echo "$IMAGE_WITH_ARCH_TAG" | sed 's/:/_/g' | sed 's/\//_/g')
+        echo "Safe filename: $SAFE_FILENAME"
+        rm -rf /shared-containers/$SAFE_FILENAME.tar
+        podman save $IMAGE_WITH_ARCH_TAG -o /shared-containers/$SAFE_FILENAME.tar
+
+        echo "Build and push completed for $ARCH"
+
+
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: create-multiarch-manifest
+  namespace: tools-rhel-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  params:
+    - name: IMAGE
+      description: Full image name including registry
+    - name: PLATFORMS
+      description: Array of target platforms (e.g., ['linux/amd64','linux/arm64'])
+      type: array
+  workspaces:
+    - name: push-registry-secret
+      optional: true
+      mountPath: /root/push-registry-secret
+    - name: shared-container-storage
+      mountPath: /shared-containers
+  steps:
+    - name: create-manifest
+      image: registry.redhat.io/rhel9/bootc-image-builder:latest
+      securityContext:
+        privileged: true
+        runAsUser: 0
+        seLinuxOptions:
+          type: container_file_t
+      args:
+        - $(params.IMAGE)
+        - '$(params.PLATFORMS[*])'
+      script: |
+        #!/bin/bash
+        set -e
+        
+        export IMAGE="$1"
+        shift
+        IMAGE="${IMAGE#http://}"
+        IMAGE="${IMAGE#https://}"
+        IMAGE="${IMAGE//\/\//\/}"
+        
+        echo "Creating multiarch manifest: $IMAGE"
+        
+        # Load images from shared storage
+        echo "Loading images from shared storage..."
+        for arch_tar in /shared-containers/*.tar; do
+          if [ -f "$arch_tar" ]; then
+            echo "Loading $(basename $arch_tar)"
+            podman load -i "$arch_tar"
+          fi
+        done
+        
+        # List loaded images for debugging
+        echo "Available images:"
+        podman images | grep "${IMAGE%:*}"
+        
+        podman manifest create $IMAGE || echo "Manifest already exists, removing and recreating..."
+        podman manifest rm $IMAGE 2>/dev/null || true
+        podman manifest create $IMAGE
+        
+        for platform in "$@"; do
+          arch="${platform##*/}"
+          tag="$arch"
+          arch_image="$IMAGE-$tag"
+          echo "Processing platform: $platform, arch: $arch, image: $arch_image"
+          
+          if podman image exists $arch_image; then
+            echo "Adding $arch_image to manifest for platform $platform"
+            podman manifest add --arch $arch $IMAGE $arch_image
+          else
+            echo "Error: Image $arch_image not found locally"
+            echo "Available images matching pattern:"
+            podman images | grep "${IMAGE%:*}" || true
+            exit 1
+          fi
+        done
+        
+        
+        echo "Pushing manifest list..."
+        podman manifest push --authfile=/root/push-registry-secret/.dockerconfigjson --all $IMAGE docker://$IMAGE
+
+        LOCAL_ARCHIVE="/shared-containers/$(basename "${IMAGE}").manifest.tar"
+        echo "Saving manifest list to $LOCAL_ARCHIVE"
+        podman manifest push --authfile=/root/push-registry-secret/.dockerconfigjson --all --format oci "$IMAGE" "oci:$LOCAL_ARCHIVE"
+        echo "Multiarch manifest created and pushed successfully"
+
+
+
+
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: bootc-multi-export
+  namespace: tools-rhel-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+
+spec:
+  params:
+    - name: image
+      description: "Full image name including registry and tag, for example 'my.registry.io/user/image:tag'"
+      type: string
+      default: ""
+    - name: bootc-build-export-formats
+      description: "Array of target file extensions (e.g., ['anaconda-iso','qcow2','vmdk','raw'])"
+      type: array
+      default: []
+    - name: bootc-build-platforms
+      description: "Array of platforms (e.g., ['linux/amd64'])"
+      type: array
+      default: ["linux/amd64"]
+    - default: ''
+      description: Platform to be exported during this iteration
+      name: platform-export
+      type: string
+    - default: ''
+      description: Format to be exported during this iteration
+      name: format-export
+      type: string
+  workspaces:
+    - name: source
+    - name: store
+      mountPath: /store
+    - name: rpmmd
+      mountPath: /rpmmd
+    - name: varlibcontainerstorage
+      mountPath: /var/lib/containers/storage
+    - name: shared-container-storage
+      mountPath: /shared-containers
+    - name: redhat-registry-secret
+      optional: true
+      mountPath: /root/redhat-registry-secret
+    - name: push-registry-secret
+      optional: true
+      mountPath: /root/push-registry-secret
+    - name: bootc-exports
+      mountPath: /bootc-exports
+    - name: rh-entitlements
+      optional: true
+      mountPath: /root/rh-entitlements
+  steps:
+    - name: generate-and-run-jobs
+      image: registry.redhat.io/rhel9/bootc-image-builder:latest
+      securityContext:
+        privileged: true
+        runAsUser: 0
+        seLinuxOptions:
+          type: container_file_t
+      args:
+        - $(params.image)
+        - '$(params.bootc-build-platforms[*])'
+        - '$(params.bootc-build-export-formats[*])'
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/bash
+
+        ## ISSUE: https://github.com/osbuild/bootc-image-builder/issues/927
+
+        set -euo pipefail
+
+        PLATFORM_ITEM=$(params.platform-export)
+        FORMAT_ITEM=$(params.format-export)
+
+        echo "###############################################################################"
+        echo "#"
+        echo "#   Exporting: $PLATFORM_ITEM - $FORMAT_ITEM"
+        echo "#"
+        echo "###############################################################################"
+
+        export IMAGE="$1"
+        shift
+        
+        PLATFORMS=()
+        FORMATS=()
+
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                linux/amd64|linux/arm64|amd64|arm64)
+                    PLATFORMS+=("$1")
+                    shift
+                    ;;
+                *)
+                    break
+                    ;;
+            esac
+        done
+
+
+        IMAGE="${IMAGE#http://}"
+        IMAGE="${IMAGE#https://}"
+        IMAGE="${IMAGE//\/\//\/}"
+
+        ARCH="${PLATFORM_ITEM##*/}"
+        TAG="${ARCH//\//-}"
+        IMAGE_WITH_ARCH_TAG="$IMAGE-$TAG"
+
+
+        # The rest of the arguments go into formats
+        FORMATS=("$@")
+
+        # test that each requested value is present in its array
+        if [[ ! " ${PLATFORMS[*]} " =~ (^|[[:space:]])"${PLATFORM_ITEM}"($|[[:space:]]) ]] \
+          || [[ ! " ${FORMATS[*]} "    =~ (^|[[:space:]])"${FORMAT_ITEM}"($|[[:space:]]) ]]; then
+            echo "No combination found for requested platforms and formats"
+            echo "Requested platforms: ${PLATFORMS[@]}"
+            echo "Requested formats: ${FORMATS[@]}"
+            exit 0
+        fi
+
+        #both values are present;
+        echo "${PLATFORM_ITEM} - ${FORMAT_ITEM} found, continuing exporting $IMAGE"
+
+
+        IMAGE_NAME_TAG=$(basename "$IMAGE")
+        SANITIZED_NAME_TAG=$(echo "$IMAGE_NAME_TAG" | sed 's/:/_/')
+        DIR_NAME=$(echo "$SANITIZED_NAME_TAG" | sed 's/[^A-Za-z0-9._-]/_/g')
+        DIR_NAME=${DIR_NAME}-${FORMAT_ITEM}
+        rm -rf /bootc-exports/$(echo "$PLATFORM_ITEM" | sed 's|linux/||')/$DIR_NAME && mkdir -p /bootc-exports/$(echo "$PLATFORM_ITEM" | sed 's|linux/||')/$DIR_NAME
+
+
+
+        echo "Enabling binfmt_misc for cross-arch builds..."
+        podman run --rm --privileged docker.io/multiarch/qemu-user-static --reset -p yes 2>/dev/null || echo "binfmt setup completed (some handlers may have already existed)"
+
+        echo "Moving Entitlements"
+        mkdir -p /etc/pki/entitlement
+        find \$(workspaces.rh-entitlements.path)/ -type f -exec cp {} /etc/pki/entitlement \;
+
+        echo "Loading images from shared storage..."
+        ls /shared-containers/*.tar
+        SAFE_FILENAME=$(echo "$IMAGE_WITH_ARCH_TAG" | sed 's/:/_/g' | sed 's/\//_/g')
+        echo "Loading /shared-containers/$SAFE_FILENAME.tar"
+        podman load -i /shared-containers/$SAFE_FILENAME.tar
+
+        echo "tag image $IMAGE_WITH_ARCH_TAG as $IMAGE"
+        podman tag $IMAGE_WITH_ARCH_TAG $IMAGE
+       
+        echo "Loaded images:"
+        podman image list
+        sudo podman pull --authfile=/root/push-registry-secret/.dockerconfigjson --platform=${PLATFORM_ITEM} $IMAGE
+
+        echo "Files exported before:"
+        ls -R /bootc-exports
+
+        echo "Building for arch $(echo "$PLATFORM_ITEM" | sed 's|linux/||')"
+
+        sudo podman run  \
+          --platform=${PLATFORM_ITEM} \
+          --rm \
+          --privileged \
+          --pull=newer \
+          --security-opt label=type:unconfined_t \
+          -v ./config.toml:/config.toml:z \
+          -v /bootc-exports/$(echo "$PLATFORM_ITEM" | sed 's|linux/||')/$DIR_NAME:/output \
+          -v /var/lib/containers/storage:/var/lib/containers/storage \
+          registry.redhat.io/rhel9/bootc-image-builder:latest --target-arch $(echo "$PLATFORM_ITEM" | sed 's|linux/||') --type ${FORMAT_ITEM} --use-librepo=True $IMAGE
+
+        echo "Files exported after:"
+        ls -R /bootc-exports
+        
+
+
+        # Upload to OCI
+
+        sudo chown -R $(whoami):$(whoami) "/bootc-exports/$(echo "$PLATFORM_ITEM" | sed 's|linux/||')/$DIR_NAME"
+
+        OCI_DISK_IMAGE_REPO=${IMAGE%%:*}/diskimage-${FORMAT_ITEM}
+        OCI_IMAGE_TAG=${IMAGE##*:}-${ARCH}
+
+        echo "Creating manifest with export"
+        sudo podman manifest create \
+            ${OCI_DISK_IMAGE_REPO}:${OCI_IMAGE_TAG}
+
+        # Determine artifact type and file path based on format
+        case "${FORMAT_ITEM}" in
+            "anaconda-iso")
+                ARTIFACT_TYPE="application/vnd.diskimage.iso"
+                FILE_PATH="/bootc-exports/$(echo "$PLATFORM_ITEM" | sed 's|linux/||')/$DIR_NAME/bootiso/install.iso"
+                ;;
+            "qcow2")
+                ARTIFACT_TYPE="application/vnd.diskimage.qcow2"
+                FILE_PATH="/bootc-exports/$(echo "$PLATFORM_ITEM" | sed 's|linux/||')/$DIR_NAME/qcow2/disk.qcow2"
+                ;;
+            "vmdk")
+                ARTIFACT_TYPE="application/vnd.diskimage.vmdk"
+                FILE_PATH="/bootc-exports/$(echo "$PLATFORM_ITEM" | sed 's|linux/||')/$DIR_NAME/vmdk/disk.vmdk"
+                ;;
+            "raw")
+                ARTIFACT_TYPE="application/vnd.diskimage.raw"
+                FILE_PATH="/bootc-exports/$(echo "$PLATFORM_ITEM" | sed 's|linux/||')/$DIR_NAME/image/disk.raw"
+                ;;
+            *)
+                echo "Unknown format: ${FORMAT_ITEM}"
+                exit 1
+                ;;
+        esac
+
+
+        echo "Using platform: $PLATFORM_ITEM"
+        echo "Using artifact type: $ARTIFACT_TYPE"
+        echo "Using file path: $FILE_PATH"
+        echo "Using image: ${OCI_DISK_IMAGE_REPO}:${OCI_IMAGE_TAG}"
+
+        # Check if the file exists
+        if [ ! -f "$FILE_PATH" ]; then
+            echo "Error: Expected file not found at $FILE_PATH"
+            echo "Available files in export directory:"
+            ls -la "/bootc-exports/$(echo "$PLATFORM_ITEM" | sed 's|linux/||')/$DIR_NAME/"
+            exit 1
+        fi
+
+        echo "Adding image with export to manifest"
+        sudo podman manifest add \
+            --artifact --artifact-type $ARTIFACT_TYPE \
+            --arch $ARCH --os=linux \
+            ${OCI_DISK_IMAGE_REPO}:${OCI_IMAGE_TAG} \
+            "$FILE_PATH"
+
+        echo "Pushing manifest"
+        sudo podman manifest push --authfile=/root/push-registry-secret/.dockerconfigjson  --all \
+            ${OCI_DISK_IMAGE_REPO}:${OCI_IMAGE_TAG} \
+            docker://${OCI_DISK_IMAGE_REPO}:${OCI_IMAGE_TAG}
+
+
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: git-clone-and-copy-subpath
+  namespace: tools-rhel-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  params:
+    - name: bootc-build-files-repo-url
+      description: The git repository URL to clone
+    - name: bootc-build-files-repo-branch
+      description: The branch to checkout
+      default: main
+    - name: bootc-build-files-repo-subpath
+      description: Subdirectory path to copy from the cloned repo
+      default: "."
+  workspaces:
+    - name: output
+      description: Target workspace where the files will be copied
+  steps:
+    - name: clone-and-copy
+      image: quay.io/luisarizmendi/ocp-job:latest
+      script: |
+        #!/bin/sh
+        set -e
+
+        echo "Cloning repo: $(params.bootc-build-files-repo-url)"
+        rm -rf /tmp/repo && git clone --depth 1 --branch $(params.bootc-build-files-repo-branch) $(params.bootc-build-files-repo-url) /tmp/repo
+
+        echo "Copying subpath: $(params.bootc-build-files-repo-subpath)"
+        rm -rf $(workspaces.output.path)/* 
+        cp -r /tmp/repo/$(params.bootc-build-files-repo-subpath)/* $(workspaces.output.path)/
+
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: check-array-empty
+  namespace: tools-rhel-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  params:
+    - name: array-param
+      type: array
+      description: "Input array param to check"
+      default: []
+  results:
+    - name: array-status
+      description: "Result is 'empty' or 'not-empty'"
+  steps:
+    - name: check-empty
+      image: bash:5
+      args:
+        - '$(params.array-param[*])'
+      script: |
+        #!/usr/bin/env bash
+        set -eo pipefail
+
+        if [ "$#" -eq 0 ]; then
+          echo "No exports found"
+          echo -n "empty" > "$(results.array-status.path)"
+        else
+          echo "Exports!"
+          echo -n "not-empty" > "$(results.array-status.path)"
+        fi
+
+
+
+
+
+
+
+
+
+
+
+
+---
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: podman-multiarch
+allowPrivilegedContainer: true
+allowHostDirVolumePlugin: false
+allowHostNetwork: false
+allowHostPorts: false
+allowHostPID: false
+allowHostIPC: false
+runAsUser:
+  type: RunAsAny
+seLinuxContext:
+  type: RunAsAny
+fsGroup:
+  type: RunAsAny
+supplementalGroups:
+  type: RunAsAny
+readOnlyRootFilesystem: false
+volumes:
+  - configMap
+  - emptyDir
+  - projected
+  - secret
+  - persistentVolumeClaim
+  - downwardAPI
+  - ephemeral
+  - hostPath
+users: []
+groups: []
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scc-admin
+  namespace: tools-rhel-image
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: scc-admin-tools-rhel-image
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: scc-admin
+    namespace: tools-rhel-image
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: patch-scc-job
+  namespace: tools-rhel-image
+spec:
+  template:
+    spec:
+      serviceAccountName: scc-admin
+      containers:
+      - name: patch-scc
+        image: quay.io/openshift/origin-cli:latest
+        command:
+        - /bin/bash
+        - -c
+        - |
+          echo "Patching SCC..."
+          oc patch scc podman-multiarch --type=json \
+            -p='[{"op": "add", "path": "/users/-", "value": "system:serviceaccount:tools-rhel-image:pipeline"}]'
+        resources:
+          requests:
+            cpu: 100m
+            memory: 100Mi
+      restartPolicy: OnFailure
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cross-namespace-pipeline-runner
+rules:
+- apiGroups: ["tekton.dev"]
+  resources: ["pipelineruns"]
+  verbs: ["create", "get", "list", "watch", "delete", "update"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pipeline-cross-namespace-binding-tools-rhel-image
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cross-namespace-pipeline-runner
+subjects:
+- kind: ServiceAccount
+  name: pipeline-runner-dspa
+  namespace: tools-rhel-image
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pipeline-bootc-build
+  namespace: tools-rhel-image
+subjects:
+- kind: ServiceAccount
+  name: pipeline
+  namespace: tools-rhel-image
+roleRef:
+  kind: ClusterRole
+  name: admin
+  apiGroup: rbac.authorization.k8s.io
+
+
+
+
+---
+# https://access.redhat.com/solutions/7128120
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: patch-tekton-config-coschedule
+  namespace: tools-rhel-image
+spec:
+  template:
+    spec:
+      serviceAccountName: scc-admin
+      containers:
+      - name: patch
+        image: quay.io/openshift/origin-cli:latest
+        command:
+        - /bin/bash
+        - -c
+        - |
+          echo "Patching TektonConfig to disable coschedule..."
+          oc patch tektonconfig config --type=merge -p '{"spec":{"pipeline":{"coschedule":"disabled"}}}'
+
+        resources:
+          requests:
+            cpu: 100m
+            memory: 100Mi
+      restartPolicy: OnFailure
+
+---
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: bootc-image-build-multiarch
+  namespace: tools-rhel-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  params:
+    - name: bootc-build-files-repo-url
+      description: "Repo url with bootc image build files"
+      type: string
+    - name: bootc-build-files-repo-branch
+      description: "Repo branch where bootc image build files are located"
+      type: string
+      default: "main"
+    - name: bootc-build-files-repo-subpath
+      description: "Repo subpath where bootc image build files are located"
+      default: "."
+      type: string
+    - name: bootc-image-name
+      type: string
+      description: "Full image name including registry and tag, for example 'my.registry.io/user/image:tag'"
+    - name: bootc-build-export-formats
+      description: "Array of target file extensions to be exported (e.g., ['anaconda-iso','qcow2','vmdk','ami']). If empty there will be no exports"
+      default: []
+      type: array
+    - name: bootc-build-platforms
+      description: "Array of target platforms (e.g., ['linux/amd64','linux/arm64']). Can be single platform."
+      default: ["linux/amd64", "linux/arm64"]
+      type: array
+    - name: skip-build
+      description: "If True the pipeline will skip the build and push. Export still could happen."
+      default: "false"
+      type: string
+
+  workspaces:
+    - name: shared-git-repo
+      description: "Volume used for sharing Git repo data between tasks"
+    - name: rh-entitlements
+      description: "Volume used for storing Red Hat Entitlements"
+    - name: shared-container-storage
+      description: "Volume used for shared container storage"
+    - name: redhat-registry-secret
+      description: "Secret with the Red Hat container registry pull credentials"
+    - name: push-registry-secret
+      description: "Secret with the credentials to push the image"
+    - name: bootc-exports
+      description: "EmptyDir for for file exports storage"
+    - name: store-amd64
+      description: "EmptyDir for image builder used for the osbuild store (amd64)"
+    - name: rpmmd-amd64
+      description: "EmptyDir for image builder used for the DNF cache (amd64)"
+    - name: varlibcontainerstorage-amd64
+      description: "EmptyDir for image builder used for containerstorage (amd64)"
+    - name: store-arm64
+      description: "EmptyDir for image builder used for the osbuild store (arm64)"
+    - name: rpmmd-arm64
+      description: "EmptyDir for image builder used for the DNF cache (arm64)"
+    - name: varlibcontainerstorage-arm64
+      description: "EmptyDir for image builder used for containerstorage (arm64)"
+
+  tasks:
+    - name: get-build-files
+      taskRef:
+        name: git-clone-and-copy-subpath
+        kind: Task
+      params:
+        - name: bootc-build-files-repo-url
+          value: $(params.bootc-build-files-repo-url)
+        - name: bootc-build-files-repo-branch
+          value: $(params.bootc-build-files-repo-branch)
+        - name: bootc-build-files-repo-subpath
+          value: $(params.bootc-build-files-repo-subpath)
+      workspaces:
+        - name: output
+          workspace: shared-git-repo 
+
+    - name: gather-rh-entitlements-amd64
+      taskRef:
+        name: gather-rh-entitlements
+        kind: Task
+      runAfter:
+        - get-build-files
+      when:
+        - input: "linux/amd64"
+          operator: in
+          values: ["$(params.bootc-build-platforms[*])"]
+        - input: "$(params.skip-build)"
+          operator: notin
+          values: ["true"]
+      params:
+        - name: PLATFORM
+          value: linux/amd64
+      workspaces:
+        - name: source
+          workspace: shared-git-repo
+        - name: rh-entitlements
+          workspace: rh-entitlements
+        - name: redhat-registry-secret
+          workspace: redhat-registry-secret
+
+    - name: gather-rh-entitlements-arm64
+      taskRef:
+        name: gather-rh-entitlements
+        kind: Task
+      runAfter:
+        - get-build-files
+      when:
+        - input: "linux/arm64"
+          operator: in
+          values: ["$(params.bootc-build-platforms[*])"]
+        - input: "$(params.skip-build)"
+          operator: notin
+          values: ["true"]
+      params:
+        - name: PLATFORM
+          value: linux/arm64
+      workspaces:
+        - name: source
+          workspace: shared-git-repo
+        - name: rh-entitlements
+          workspace: rh-entitlements
+        - name: redhat-registry-secret
+          workspace: redhat-registry-secret
+
+    - name: build-amd64
+      runAfter:
+        - gather-rh-entitlements-amd64
+      when:
+        - input: "linux/amd64"
+          operator: in
+          values: ["$(params.bootc-build-platforms[*])"]
+        - input: "$(params.skip-build)"
+          operator: notin
+          values: ["true"]
+      taskRef:
+        name: bootc-build
+        kind: Task
+      params:
+        - name: IMAGE
+          value: $(params.bootc-image-name)
+        - name: PLATFORM
+          value: linux/amd64
+      workspaces:
+        - name: source
+          workspace: shared-git-repo
+        - name: rh-entitlements
+          workspace: rh-entitlements
+        - name: redhat-registry-secret
+          workspace: redhat-registry-secret
+        - name: push-registry-secret
+          workspace: push-registry-secret
+        - name: store
+          workspace: store-amd64
+        - name: rpmmd
+          workspace: rpmmd-amd64
+        - name: varlibcontainerstorage
+          workspace: varlibcontainerstorage-amd64
+        - name: shared-container-storage
+          workspace: shared-container-storage
+
+    - name: build-arm64
+      runAfter:
+        - gather-rh-entitlements-arm64
+      when:
+        - input: "linux/arm64"
+          operator: in
+          values: ["$(params.bootc-build-platforms[*])"]
+        - input: "$(params.skip-build)"
+          operator: notin
+          values: ["true"]
+      taskRef:
+        name: bootc-build
+        kind: Task
+      params:
+        - name: IMAGE
+          value: $(params.bootc-image-name)
+        - name: PLATFORM
+          value: linux/arm64
+      workspaces:
+        - name: source
+          workspace: shared-git-repo
+        - name: rh-entitlements
+          workspace: rh-entitlements
+        - name: redhat-registry-secret
+          workspace: redhat-registry-secret
+        - name: push-registry-secret
+          workspace: push-registry-secret
+        - name: store
+          workspace: store-arm64
+        - name: rpmmd
+          workspace: rpmmd-arm64
+        - name: varlibcontainerstorage
+          workspace: varlibcontainerstorage-arm64
+        - name: shared-container-storage
+          workspace: shared-container-storage
+
+    - name: create-multiarch-manifest
+      runAfter:
+        - build-amd64
+        - build-arm64
+      when:
+        - input: "$(params.skip-build)"
+          operator: notin
+          values: ["true"]
+      taskRef:
+        name: create-multiarch-manifest
+        kind: Task
+      params:
+        - name: IMAGE
+          value: $(params.bootc-image-name)
+        - name: PLATFORMS
+          value: ["$(params.bootc-build-platforms)"]
+      workspaces:
+        - name: push-registry-secret
+          workspace: push-registry-secret
+        - name: shared-container-storage
+          workspace: shared-container-storage
+
+    - name: check-exports
+      taskRef:
+        name: check-array-empty
+      runAfter:
+        - create-multiarch-manifest
+      params:
+        - name: array-param
+          value: ["$(params.bootc-build-export-formats)"]
+
+
+
+    - name: export-amd64-iso
+      runAfter:
+        - check-exports
+      when:
+        - input: "$(tasks.check-exports.results.array-status)"
+          operator: in
+          values: ["not-empty"]
+      taskRef:
+        name: bootc-multi-export
+        kind: Task
+      params:
+        - name: platform-export
+          value: linux/amd64
+        - name: format-export
+          value: anaconda-iso
+        - name: image
+          value: $(params.bootc-image-name)
+        - name: bootc-build-platforms
+          value: ["$(params.bootc-build-platforms)"]
+        - name: bootc-build-export-formats
+          value: ["$(params.bootc-build-export-formats)"]
+      workspaces:
+        - name: source
+          workspace: shared-git-repo
+        - name: rh-entitlements
+          workspace: rh-entitlements
+        - name: bootc-exports
+          workspace: bootc-exports
+        - name: store
+          workspace: store-amd64
+        - name: rpmmd
+          workspace: rpmmd-amd64
+        - name: varlibcontainerstorage
+          workspace: varlibcontainerstorage-amd64
+        - name: shared-container-storage
+          workspace: shared-container-storage
+        - name: push-registry-secret
+          workspace: push-registry-secret
+        - name: redhat-registry-secret
+          workspace: redhat-registry-secret
+
+    - name: export-amd64-qcow2
+      runAfter:
+        - check-exports
+      when:
+        - input: "$(tasks.check-exports.results.array-status)"
+          operator: in
+          values: ["not-empty"]
+      taskRef:
+        name: bootc-multi-export
+        kind: Task
+      params:
+        - name: platform-export
+          value: linux/amd64
+        - name: format-export
+          value: qcow2    
+        - name: image
+          value: $(params.bootc-image-name)
+        - name: bootc-build-platforms
+          value: ["$(params.bootc-build-platforms)"]
+        - name: bootc-build-export-formats
+          value: ["$(params.bootc-build-export-formats)"]
+      workspaces:
+        - name: source
+          workspace: shared-git-repo
+        - name: rh-entitlements
+          workspace: rh-entitlements
+        - name: bootc-exports
+          workspace: bootc-exports
+        - name: store
+          workspace: store-amd64
+        - name: rpmmd
+          workspace: rpmmd-amd64
+        - name: varlibcontainerstorage
+          workspace: varlibcontainerstorage-amd64
+        - name: shared-container-storage
+          workspace: shared-container-storage
+        - name: push-registry-secret
+          workspace: push-registry-secret
+        - name: redhat-registry-secret
+          workspace: redhat-registry-secret
+
+
+    - name: export-amd64-vmdk
+      runAfter:
+        - check-exports
+      when:
+        - input: "$(tasks.check-exports.results.array-status)"
+          operator: in
+          values: ["not-empty"]
+      taskRef:
+        name: bootc-multi-export
+        kind: Task
+      params:
+        - name: platform-export
+          value: linux/amd64
+        - name: format-export
+          value: vmdk
+        - name: image
+          value: $(params.bootc-image-name)
+        - name: bootc-build-platforms
+          value: ["$(params.bootc-build-platforms)"]
+        - name: bootc-build-export-formats
+          value: ["$(params.bootc-build-export-formats)"]
+      workspaces:
+        - name: source
+          workspace: shared-git-repo
+        - name: rh-entitlements
+          workspace: rh-entitlements
+        - name: bootc-exports
+          workspace: bootc-exports
+        - name: store
+          workspace: store-amd64
+        - name: rpmmd
+          workspace: rpmmd-amd64
+        - name: varlibcontainerstorage
+          workspace: varlibcontainerstorage-amd64
+        - name: shared-container-storage
+          workspace: shared-container-storage
+        - name: push-registry-secret
+          workspace: push-registry-secret
+        - name: redhat-registry-secret
+          workspace: redhat-registry-secret
+
+    - name: export-amd64-raw
+      runAfter:
+        - check-exports
+      when:
+        - input: "$(tasks.check-exports.results.array-status)"
+          operator: in
+          values: ["not-empty"]
+      taskRef:
+        name: bootc-multi-export
+        kind: Task
+      params:
+        - name: platform-export
+          value: linux/amd64
+        - name: format-export
+          value: raw 
+        - name: image
+          value: $(params.bootc-image-name)
+        - name: bootc-build-platforms
+          value: ["$(params.bootc-build-platforms)"]
+        - name: bootc-build-export-formats
+          value: ["$(params.bootc-build-export-formats)"]
+      workspaces:
+        - name: source
+          workspace: shared-git-repo
+        - name: rh-entitlements
+          workspace: rh-entitlements
+        - name: bootc-exports
+          workspace: bootc-exports
+        - name: store
+          workspace: store-amd64
+        - name: rpmmd
+          workspace: rpmmd-amd64
+        - name: varlibcontainerstorage
+          workspace: varlibcontainerstorage-amd64
+        - name: shared-container-storage
+          workspace: shared-container-storage
+        - name: push-registry-secret
+          workspace: push-registry-secret
+        - name: redhat-registry-secret
+          workspace: redhat-registry-secret
+
+
+
+    - name: export-arm64-iso
+      runAfter:
+        - check-exports
+      when:
+        - input: "$(tasks.check-exports.results.array-status)"
+          operator: in
+          values: ["not-empty"]
+      taskRef:
+        name: bootc-multi-export
+        kind: Task
+      params:
+        - name: platform-export
+          value: linux/arm64
+        - name: format-export
+          value: anaconda-iso      
+        - name: image
+          value: $(params.bootc-image-name)
+        - name: bootc-build-platforms
+          value: ["$(params.bootc-build-platforms)"]
+        - name: bootc-build-export-formats
+          value: ["$(params.bootc-build-export-formats)"]
+      workspaces:
+        - name: source
+          workspace: shared-git-repo
+        - name: rh-entitlements
+          workspace: rh-entitlements
+        - name: bootc-exports
+          workspace: bootc-exports
+        - name: store
+          workspace: store-arm64
+        - name: rpmmd
+          workspace: rpmmd-arm64
+        - name: varlibcontainerstorage
+          workspace: varlibcontainerstorage-arm64
+        - name: shared-container-storage
+          workspace: shared-container-storage
+        - name: push-registry-secret
+          workspace: push-registry-secret
+        - name: redhat-registry-secret
+          workspace: redhat-registry-secret
+
+    - name: export-arm64-qcow2
+      runAfter:
+        - check-exports
+      when:
+        - input: "$(tasks.check-exports.results.array-status)"
+          operator: in
+          values: ["not-empty"]
+      taskRef:
+        name: bootc-multi-export
+        kind: Task
+      params:
+        - name: platform-export
+          value: linux/arm64
+        - name: format-export
+          value: qcow2
+        - name: image
+          value: $(params.bootc-image-name)
+        - name: bootc-build-platforms
+          value: ["$(params.bootc-build-platforms)"]
+        - name: bootc-build-export-formats
+          value: ["$(params.bootc-build-export-formats)"]
+      workspaces:
+        - name: source
+          workspace: shared-git-repo
+        - name: rh-entitlements
+          workspace: rh-entitlements
+        - name: bootc-exports
+          workspace: bootc-exports
+        - name: store
+          workspace: store-arm64
+        - name: rpmmd
+          workspace: rpmmd-arm64
+        - name: varlibcontainerstorage
+          workspace: varlibcontainerstorage-arm64
+        - name: shared-container-storage
+          workspace: shared-container-storage
+        - name: push-registry-secret
+          workspace: push-registry-secret
+        - name: redhat-registry-secret
+          workspace: redhat-registry-secret
+
+
+    - name: export-arm64-vmdk
+      runAfter:
+        - check-exports
+      when:
+        - input: "$(tasks.check-exports.results.array-status)"
+          operator: in
+          values: ["not-empty"]
+      taskRef:
+        name: bootc-multi-export
+        kind: Task
+      params:
+        - name: platform-export
+          value: linux/arm64
+        - name: format-export
+          value: vmdk 
+        - name: image
+          value: $(params.bootc-image-name)
+        - name: bootc-build-platforms
+          value: ["$(params.bootc-build-platforms)"]
+        - name: bootc-build-export-formats
+          value: ["$(params.bootc-build-export-formats)"]
+      workspaces:
+        - name: source
+          workspace: shared-git-repo
+        - name: rh-entitlements
+          workspace: rh-entitlements
+        - name: bootc-exports
+          workspace: bootc-exports
+        - name: store
+          workspace: store-arm64
+        - name: rpmmd
+          workspace: rpmmd-arm64
+        - name: varlibcontainerstorage
+          workspace: varlibcontainerstorage-arm64
+        - name: shared-container-storage
+          workspace: shared-container-storage
+        - name: push-registry-secret
+          workspace: push-registry-secret
+        - name: redhat-registry-secret
+          workspace: redhat-registry-secret
+
+    - name: export-arm64-raw
+      runAfter:
+        - check-exports
+      when:
+        - input: "$(tasks.check-exports.results.array-status)"
+          operator: in
+          values: ["not-empty"]
+      taskRef:
+        name: bootc-multi-export
+        kind: Task
+      params:
+        - name: platform-export
+          value: linux/arm64
+        - name: format-export
+          value: raw
+        - name: image
+          value: $(params.bootc-image-name)
+        - name: bootc-build-platforms
+          value: ["$(params.bootc-build-platforms)"]
+        - name: bootc-build-export-formats
+          value: ["$(params.bootc-build-export-formats)"]
+      workspaces:
+        - name: source
+          workspace: shared-git-repo
+        - name: rh-entitlements
+          workspace: rh-entitlements
+        - name: bootc-exports
+          workspace: bootc-exports
+        - name: store
+          workspace: store-arm64
+        - name: rpmmd
+          workspace: rpmmd-arm64
+        - name: varlibcontainerstorage
+          workspace: varlibcontainerstorage-arm64
+        - name: shared-container-storage
+          workspace: shared-container-storage
+        - name: push-registry-secret
+          workspace: push-registry-secret
+        - name: redhat-registry-secret
+          workspace: redhat-registry-secret
+

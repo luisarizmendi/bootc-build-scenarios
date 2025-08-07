@@ -1,0 +1,83 @@
+###############
+## https://docs.redhat.com/en/documentation/openshift_container_platform/4.15/html/postinstallation_configuration/configuring-multi-architecture-compute-machines-on-an-openshift-cluster#multi-architecture-verifying-cluster-compatibility_creating-multi-arch-compute-nodes-aws
+## https://docs.redhat.com/en/documentation/openshift_container_platform/4.15/html-single/updating_clusters/index#migrating-to-multi-arch-cli_updating-clusters-overview
+
+
+# Check if multi:
+# oc adm release info -o jsonpath="{ .metadata.metadata}"
+#
+# Check  RetrieveUpdates:
+#	oc get clusterversion/version -o=jsonpath="{.status.conditions[?(.type=='RetrievedUpdates')].status}"
+# 
+################
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scc-admin
+  namespace: openshift
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: scc-admin-openshift
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: scc-admin
+    namespace: openshift
+---
+
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: update-to-multiarch
+  namespace: openshift
+spec:
+  template:
+    spec:
+      serviceAccountName: scc-admin
+      restartPolicy: Never
+      containers:
+      - name: bootstrap-arm
+        image: quay.io/luisarizmendi/ocp-job:latest
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          #!/bin/bash
+
+          echo "Starting multi-arch upgrade..."
+          oc adm upgrade --to-multi-arch
+
+          check_upgrade_status() {
+              oc get clusterversion version -o jsonpath='{.status.conditions[?(@.type=="Progressing")].status}'
+          }
+
+          sleep 300
+
+          echo "Waiting for upgrade to complete..."
+          while true; do
+              status=$(check_upgrade_status)
+
+              if [ "$status" == "False" ]; then
+                  echo "Upgrade completed."
+                  break
+              else
+                  echo "Upgrade still in progress... checking again in 30 seconds."
+                  sleep 30
+              fi
+          done
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
+  backoffLimit: 1

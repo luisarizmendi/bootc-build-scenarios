@@ -1,0 +1,39 @@
+FROM registry.redhat.io/rhel9/rhel-bootc:9.6
+
+# Subscribe
+RUN --mount=type=secret,id=username \
+    --mount=type=secret,id=password \
+    echo "Registering with Red Hat subscription manager..." && \
+    rm -rf /etc/rhsm-host && subscription-manager register \
+      --username "$(cat /run/secrets/username)" \
+      --password "$(cat /run/secrets/password)" | tee /tmp/register_output && \
+    grep -o 'ID: [a-f0-9-]*' /tmp/register_output | cut -d' ' -f2 > /etc/rhsm/system_id && \
+    grep -o 'system name is: [a-f0-9-]*' /tmp/register_output | cut -d' ' -f4 > /etc/rhsm/host_id && \
+    rm -f /tmp/register_output
+
+RUN dnf -y copr enable @redhat-et/flightctl && \
+    dnf -y install flightctl-agent && \
+    dnf -y clean all && \
+    systemctl enable flightctl-agent.service && \
+    systemctl mask bootc-fetch-apply-updates.timer
+
+# Optional: To enable podman-compose application support, uncomment below
+ RUN dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
+     dnf -y install podman-compose && \
+     dnf -y clean all && \
+     rm -rf /var/{cache,log} /var/lib/{dnf,rhsm} && \
+     systemctl enable podman.service
+
+#ADD config.yaml /etc/flightctl/
+
+# Clean-up and unregistering
+RUN --mount=type=secret,id=username \
+    --mount=type=secret,id=password \
+    echo "Unregistering…" && \
+    for uuid in $(curl -s -u "$(cat /run/secrets/username):$(cat /run/secrets/password)" \
+        https://cloud.redhat.com/api/inventory/v1/hosts?fqdn=$(cat /etc/rhsm/host_id) | \
+        grep -o '"id":"[^"]*' | grep -o '[^"]*$'); do \
+      curl -u "$(cat /run/secrets/username):$(cat /run/secrets/password)" \
+        -X DELETE https://cloud.redhat.com/api/inventory/v1/hosts/$uuid -H "accept: */*"; \
+    done && subscription-manager unregister && subscription-manager clean && \
+    ln -s /run/secrets/rhsm /etc/rhsm-host 

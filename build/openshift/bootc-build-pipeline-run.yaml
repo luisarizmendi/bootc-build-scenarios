@@ -1,0 +1,210 @@
+###
+#
+# NOTE: At this moment the cross-arch build works (you can build an x86 image in an ARM system and viceversa),
+#       but the export does not, so if you want to export from an ARM container image you will need an ARM node in your cluster.
+#       You will also need ReadWriteMany volumes. 
+#
+##
+
+
+
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  name: bootc-build-multiarch-iso-qcow2
+  labels:
+    tekton.dev/pipeline: bootc-image-build-multiarch
+spec:
+  params:
+    - name: bootc-build-files-repo-url
+      value: 'https://github.com/luisarizmendi/workshop-rhel-bootc-image-build'  
+    - name: bootc-build-files-repo-branch
+      value: main
+    - name: bootc-build-files-repo-subpath
+      value: resources/example-image
+    - name: bootc-image-name
+      value: 'quay.io/luisarizmendi/myrhel:test'
+    - name: bootc-build-export-formats
+      value:
+        - anaconda-iso
+        - qcow2
+    - name: bootc-build-platforms
+      value:
+        - linux/amd64
+        #- linux/arm64
+    - name: skip-build
+      value: 'false'
+  pipelineRef:
+    name: bootc-image-build-multiarch
+  taskRunTemplate:
+    serviceAccountName: pipeline
+  timeouts:
+    pipeline: 2h0m0s
+  taskRunSpecs:
+    # ARM64 tasks — prefer arm64 nodes
+    - pipelineTaskName: gather-rh-entitlements-arm64
+      podTemplate:
+        affinity:
+          nodeAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                preference:
+                  matchExpressions:
+                    - key: kubernetes.io/arch
+                      operator: In
+                      values:
+                        - arm64
+        tolerations:
+          - key: "node.kubernetes.io/arch"
+            operator: "Equal"
+            value: "arm64"
+            effect: "NoSchedule"
+    - pipelineTaskName: build-arm64
+      podTemplate:
+        affinity:
+          nodeAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                preference:
+                  matchExpressions:
+                    - key: kubernetes.io/arch
+                      operator: In
+                      values:
+                        - arm64
+        tolerations:
+          - key: "node.kubernetes.io/arch"
+            operator: "Equal"
+            value: "arm64"
+            effect: "NoSchedule"
+    - pipelineTaskName: export-arm64-iso
+      podTemplate:
+        affinity:
+          nodeAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                preference:
+                  matchExpressions:
+                    - key: kubernetes.io/arch
+                      operator: In
+                      values:
+                        - arm64
+        tolerations:
+          - key: "node.kubernetes.io/arch"
+            operator: "Equal"
+            value: "arm64"
+            effect: "NoSchedule"
+    - pipelineTaskName: export-arm64-qcow2
+      podTemplate:
+        affinity:
+          nodeAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                preference:
+                  matchExpressions:
+                    - key: kubernetes.io/arch
+                      operator: In
+                      values:
+                        - arm64
+        tolerations:
+          - key: "node.kubernetes.io/arch"
+            operator: "Equal"
+            value: "arm64"
+            effect: "NoSchedule"
+    - pipelineTaskName: export-arm64-vmdk
+      podTemplate:
+        affinity:
+          nodeAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                preference:
+                  matchExpressions:
+                    - key: kubernetes.io/arch
+                      operator: In
+                      values:
+                        - arm64
+        tolerations:
+          - key: "node.kubernetes.io/arch"
+            operator: "Equal"
+            value: "arm64"
+            effect: "NoSchedule"
+    - pipelineTaskName: export-arm64-raw
+      podTemplate:
+        affinity:
+          nodeAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                preference:
+                  matchExpressions:
+                    - key: kubernetes.io/arch
+                      operator: In
+                      values:
+                        - arm64
+        tolerations:
+          - key: "node.kubernetes.io/arch"
+            operator: "Equal"
+            value: "arm64"
+            effect: "NoSchedule"
+  workspaces:
+    - name: shared-git-repo
+      persistentVolumeClaim:
+        claimName: bootc-build-git-repo
+    - name: rh-entitlements
+      persistentVolumeClaim:
+        claimName: bootc-build-entitlements
+    - name: shared-container-storage
+      persistentVolumeClaim:
+        claimName: bootc-build-conatiner-storage
+    - name: redhat-registry-secret
+      secret:
+        secretName: redhat-registry-secret
+    - name: push-registry-secret
+      secret:
+        secretName: push-registry-secret
+    - emptyDir: {}
+      name: bootc-exports
+    - emptyDir: {}
+      name: store-amd64
+    - emptyDir: {}
+      name: rpmmd-amd64
+    - emptyDir: {}
+      name: varlibcontainerstorage-amd64
+    - emptyDir: {}
+      name: store-arm64
+    - emptyDir: {}
+      name: rpmmd-arm64
+    - emptyDir: {}
+      name: varlibcontainerstorage-arm64
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
