@@ -152,8 +152,6 @@ sudo podman run \
     <YOUR_BOOTC_IMAGE_NAME>
 ```
 
-## Supported Image Types
-
 Choose the appropriate `--type` parameter based on your target environment:
 
 | Image Type | Description | Use Case |
