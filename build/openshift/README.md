@@ -24,7 +24,7 @@ The pipeline executes the following workflow steps in sequence:
 **⚠️ Note:** This pipeline embeds the installable artifacts into a dedicated container image. This is a good idea if you want to minimize the external infrastructure needed, since you can use the OCI registry to host both the bootc image and the installable artifacts. A different option is to upload the artifacts into a storage system, for example an object storage. You can review [a variant of this pipeline that uses OpenShift Data Foundation object storage instead](https://github.com/luisarizmendi/workshop-moving-ai-to-the-edge/blob/main/deployment/openshift/bootstrap-lab/manifests/pipelines/05-admin-pipelines.yaml).
 
 
-Once completed, you will have the generated images and artifacts in your container image registry:
+Once completed, you will have the generated images and artifacts in your container image registry in dedicated repositories:
 
 ![openshift_results.png](../../doc/openshift_results.png)
 
@@ -171,19 +171,6 @@ The configuration will depend on your source code repository provider. In the ca
     * **Content type**: `application/json`
 
 Once you configure the Webhook, try to make a change in the Containerfile and push it to the repository. You should see how your pipeline is triggered automatically.
-
----
-
-## Results
-
-You can find the generated images in your Container Registry, along with the installable artifacts if you created them.
-
-The pipeline produces:
-* **Multi-architecture bootc images** with proper manifest lists that automatically select the correct architecture when pulled
-* **Installable artifact containers** (if enabled) containing ISO files, disk images, and other deployment formats
-* **Proper tagging and metadata** for easy identification and management
-
-![openshift_results.png](../../doc/openshift_results.png)
 
 ---
 
