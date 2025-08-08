@@ -8,6 +8,16 @@ Bootc is a technology that enables transactional, in-place operating system upda
 
 ![bootc-system-update](doc/bootc-system-update.png)
 
+
+## How do do you build Bootc images?
+
+Building a bootc image follows a process similar to creating a traditional container image, with an additional extra steps if you need a installable OS asset.
+
+
+1. Prepare the Containerfile and associated files that describe your image
+2. Build the Container image using standard tools
+3. Create installable artifacts (optional). If you want to deploy on fresh hardware or a cloud instance (e.g., bare metal, VM, or cloud provider image), use `bootc-image-builder` to produce installable formats (ISO,RAW,VMDK,AMI,...)
+
 ## Repository Structure
 
 This repository contains various scenarios and examples organized by platform and build methodology:
@@ -42,3 +52,12 @@ cd bootc-build-scenarios
 
 3. Follow the README in the specific scenario directory
 
+
+## Caveats
+
+* Cross-architecture builds
+Just like with regular container images, you can build for a different CPU architecture (e.g., creating an ARM64 image on an x86_64 system) using multi-architecture build tools.
+However, this only works reliably for RAW images at the moment — other formats may fail when cross-compiled.
+
+* Match your build environment to your target image type
+For faster builds and fewer compatibility issues, use a build system that matches your target architecture and intended deployment platform.
