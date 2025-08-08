@@ -73,7 +73,7 @@ while getopts "i:a:c:o:t:f:h" opt; do
             CONTEXT="$OPTARG"
             ;;
         o)
-            OUTPUT_DIR=t"$OPTARG"
+            OUTPUT_DIR="$OPTARG"
             ;;
         t)
             CONFIG_FILE="$OPTARG"
