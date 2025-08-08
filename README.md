@@ -25,10 +25,10 @@ bootc-build-scenarios/
 
 These are the scenarios that you can find in this repo:
 
-  * Build using RHEL systems
-  * Build using Non-RHEL systems
-  * Build using OpenShift Pipelines
-  * Build using GitHub Actions
+  * [Build using RHEL systems](build/rhel/)
+  * [Build using Non-RHEL systems](build/non-rhel/)
+  * [Build using OpenShift Pipelines](build/openshift/)
+  * [Build using GitHub Actions](build/github-actions/)
 
 ## Quick Start
 
