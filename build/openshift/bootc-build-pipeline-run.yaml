@@ -11,19 +11,19 @@
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
-  name: bootc-build-multiarch-iso-qcow2
+  generateName: bootc-build-multiarch-iso-qcow2
   labels:
     tekton.dev/pipeline: bootc-image-build-multiarch
 spec:
   params:
     - name: bootc-build-files-repo-url
-      value: 'https://github.com/luisarizmendi/workshop-rhel-bootc-image-build'  
+      value: 'https://github.com/luisarizmendi/bootc-build-scenarios'  
     - name: bootc-build-files-repo-branch
       value: main
     - name: bootc-build-files-repo-subpath
-      value: resources/example-image
+      value: images/base
     - name: bootc-image-name
-      value: 'quay.io/luisarizmendi/myrhel:test'
+      value: 'quay.io/luisarizmendi/myrhel:v1'
     - name: bootc-build-export-formats
       value:
         - anaconda-iso

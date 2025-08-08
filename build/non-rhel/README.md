@@ -9,6 +9,8 @@ Building `bootc` images from non-RHEL base images (such as CentOS Stream, Fedora
 - Access to container registries (registry.redhat.io, quay.io, etc.)
 - Root privileges for image building and exports
 
+---
+
 ## ⚠️ Important Notes About Red Hat Entitlements
 
 ### Why Entitlements Are Needed
@@ -128,6 +130,7 @@ rm -f Containerfile.subs
 rm -rf entitlements
 ```
 
+---
 
 ## Part 1: Image Build
 
@@ -220,6 +223,8 @@ Push your built image to a container registry:
 podman push <YOUR_BOOTC_IMAGE_NAME>
 ```
 
+---
+
 ## Part 2: Create Installable Artifacts
 
 If you want to install this image on bare metal servers or VMs, you'll need to create bootable artifacts using `bootc-image-builder`.
@@ -293,6 +298,9 @@ Choose the appropriate `--type` parameter based on your target environment:
 | `raw` | Raw disk image | Direct disk writing, custom deployments |
 | `gce` | Google Compute Engine image | Google Cloud Platform |
 
+
+---
+
 ## Example Complete Workflow
 
 Here's a complete example building a CentOS Stream-based web server with RHEL packages:
@@ -357,6 +365,8 @@ sudo podman run \
     --target-arch $ARCH \
     quay.io/myuser/web-server-bootc:latest
 ```
+
+---
 
 ## Scripts
 

@@ -9,6 +9,8 @@ Using a subscribed RHEL system (RHEL 9+) is the most straightforward way to crea
 - Access to container registries (registry.redhat.io)
 - Root privileges for image building
 
+---
+
 ## Part 1: Image Build
 
 ### Step 1: Subscribe Your System
@@ -94,6 +96,8 @@ Push your built image to a container registry:
 podman push <YOUR_BOOTC_IMAGE_NAME>
 ```
 
+---
+
 ## Part 2: Create Installable Artifacts
 
 If you want to install this image on bare metal servers or VMs, you'll need to create bootable artifacts using `bootc-image-builder`.
@@ -164,6 +168,8 @@ Choose the appropriate `--type` parameter based on your target environment:
 | `anaconda-iso` | Bootable ISO installer | Unattended installation on physical hardware |
 | `gce` | Google Compute Engine image | Google Cloud Platform |
 
+---
+
 ## Example Complete Workflow
 
 Here's a complete example building a QEMU-compatible image:
@@ -206,6 +212,8 @@ sudo podman run \
     --type qcow2 \
     quay.io/myuser/web-server-bootc:latest
 ```
+
+---
 
 ## Scripts
 

@@ -8,7 +8,7 @@
 #	  -o jsonpath='{.data.stream}' | jq \
 #	  -r '.architectures.<arch>.images.aws.regions."<region>".image'
 #
-# For example: oc get configmap/coreos-bootimages -n openshift-machine-config-operator -o jsonpath='{.data.stream}' | jq -r '.architectures.aarch64.images.aws.regions."us-east-2".image'
+# For example for us-east-2: oc get configmap/coreos-bootimages -n openshift-machine-config-operator -o jsonpath='{.data.stream}' | jq -r '.architectures.aarch64.images.aws.regions."us-east-2".image'
 #  ->  it will get output: ami-0b04071739ccf4af2
 # 
 ################

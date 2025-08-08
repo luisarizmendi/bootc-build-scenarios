@@ -13,9 +13,9 @@ Bootc is a technology that enables transactional, in-place operating system upda
 
 Building a bootc image follows a process similar to creating a traditional container image, with an additional extra steps if you need a installable OS asset.
 
-1. Prepare the Containerfile that describe your image and the associated files
-2. Build the Container image using standard tools
-3. Create installable artifacts (optional). If you want to deploy on fresh hardware or a cloud instance (e.g., bare metal, VM, or cloud provider image), use `bootc-image-builder` to produce installable formats (ISO,RAW,VMDK,AMI,...)
+0. Prepare the Containerfile that describe your image and the associated files
+1. Build the Container image using standard tools
+2. Create installable artifacts (optional). If you want to deploy on fresh hardware or a cloud instance (e.g., bare metal, VM, or cloud provider image), use `bootc-image-builder` to produce installable formats (ISO,RAW,VMDK,AMI,...)
 
 ## Repository Structure
 
