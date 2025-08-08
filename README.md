@@ -4,7 +4,7 @@ A collection of examples demonstrating how to build bootc images across differen
 
 ## What is Bootc?
 
-Bootc (bootable containers) is a technology that enables transactional, in-place operating system updates using OCI/Docker container images. It applies the successful container layering model to bootable host systems, using standard OCI/Docker containers as a transport and delivery format for base operating system updates.
+Bootc is a technology that enables transactional, in-place operating system updates using OCI/Docker container images by using bootable containers (container images that include the Kernel). It applies the successful container layering model to bootable host systems, using standard OCI/Docker containers as a transport and delivery format for base operating system updates.
 
 ![bootc-system-update](doc/bootc-system-update.png)
 
