@@ -24,6 +24,11 @@ The pipeline executes the following workflow steps in sequence:
 **⚠️ Note:** This pipeline embeds the installable artifacts into a dedicated container image. This is a good idea if you want to minimize the external infrastructure needed, since you can use the OCI registry to host both the bootc image and the installable artifacts. A different option is to upload the artifacts into a storage system, for example an object storage. You can review [a variant of this pipeline that uses OpenShift Data Foundation object storage instead](https://github.com/luisarizmendi/workshop-moving-ai-to-the-edge/blob/main/deployment/openshift/bootstrap-lab/manifests/pipelines/05-admin-pipelines.yaml).
 
 
+Once completed, you will have the generated images and artifacts in your container image registry:
+
+![openshift_results.png](../../doc/openshift_results.png)
+
+
 ---
 
 ## Environment Setup
@@ -39,11 +44,7 @@ This step installs the Tekton-based pipeline engine that powers the build automa
 
 ### 2. Create Project for Pipeline Resources
 
-Create a dedicated project where the pipelines will be created. In the provided YAML it is `tools-rhel-image`. This isolation helps with resource management and access control:
-
-```bash
-oc new-project tools-rhel-image
-```
+Create a dedicated project where the pipelines will be created. In the provided YAML it is `tools-rhel-image`. 
 
 ### 3. (Optional) RWX Storage NFS Provider
 
