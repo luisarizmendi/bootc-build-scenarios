@@ -438,7 +438,7 @@ spec:
       mountPath: /root/rh-entitlements
   steps:
     - name: generate-and-run-jobs
-      image: registry.redhat.io/rhel9/bootc-image-builder:latest
+      image: registry.redhat.io/rhel9/bootc-image-builder:9.4
       securityContext:
         privileged: true
         runAsUser: 0
@@ -535,14 +535,14 @@ spec:
        
         echo "Loaded images:"
         podman image list
-        podman pull --authfile=/root/push-registry-secret/.dockerconfigjson --platform=${PLATFORM_ITEM} $IMAGE
+        sudo podman pull --authfile=/root/push-registry-secret/.dockerconfigjson --platform=${PLATFORM_ITEM} $IMAGE
 
         echo "Files exported before:"
         ls -R /bootc-exports
 
         echo "Building for arch $(echo "$PLATFORM_ITEM" | sed 's|linux/||')"
 
-        podman run  \
+        sudo podman run  \
           --platform=${PLATFORM_ITEM} \
           --rm \
           --privileged \
@@ -560,13 +560,13 @@ spec:
 
         # Upload to OCI
 
-        chown -R $(whoami):$(whoami) "/bootc-exports/$(echo "$PLATFORM_ITEM" | sed 's|linux/||')/$DIR_NAME"
+        sudo chown -R $(whoami):$(whoami) "/bootc-exports/$(echo "$PLATFORM_ITEM" | sed 's|linux/||')/$DIR_NAME"
 
         OCI_DISK_IMAGE_REPO=${IMAGE%%:*}/diskimage-${FORMAT_ITEM}
         OCI_IMAGE_TAG=${IMAGE##*:}-${ARCH}
 
         echo "Creating manifest with export"
-        podman manifest create \
+        sudo podman manifest create \
             ${OCI_DISK_IMAGE_REPO}:${OCI_IMAGE_TAG}
 
         # Determine artifact type and file path based on format
@@ -608,14 +608,14 @@ spec:
         fi
 
         echo "Adding image with export to manifest"
-        podman manifest add \
+        sudo podman manifest add \
             --artifact --artifact-type $ARTIFACT_TYPE \
             --arch $ARCH --os=linux \
             ${OCI_DISK_IMAGE_REPO}:${OCI_IMAGE_TAG} \
             "$FILE_PATH"
 
         echo "Pushing manifest"
-        podman manifest push --authfile=/root/push-registry-secret/.dockerconfigjson  --all \
+        sudo podman manifest push --authfile=/root/push-registry-secret/.dockerconfigjson  --all \
             ${OCI_DISK_IMAGE_REPO}:${OCI_IMAGE_TAG} \
             docker://${OCI_DISK_IMAGE_REPO}:${OCI_IMAGE_TAG}
 
