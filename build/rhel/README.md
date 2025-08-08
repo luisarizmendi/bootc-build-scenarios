@@ -214,19 +214,19 @@ sudo podman run \
 In order to simplify the procedure I created some scripts that you can find under the `scripts` directory, for example:
 
 
-## Container Image Builder (`build-image.sh`)
+### Container Image Builder (`build-image.sh`)
 
-### Purpose
+#### Purpose
 This bash script automates container image building using Podman with automatic architecture detection and cross-platform build support for bootc (boot container) images.
 
-### Key Features
+#### Key Features
 - **Auto-detection**: Automatically detects system architecture (amd64/arm64) if not specified
 - **Cross-platform builds**: Supports explicit architecture specification with binfmt_misc setup for cross-compilation
 - **Registry authentication**: Automatically handles login to the base image registry
 - **Flexible configuration**: Customizable Containerfile path, build context, and image name
 - **Validation**: Checks for required files and directories before building
 
-### Usage
+#### Usage
 ```bash
 ./build-image.sh [OPTIONS] -i IMAGE
 
@@ -238,7 +238,7 @@ OPTIONS:
   -h                   Show this help message
 ```
 
-### Examples
+#### Examples
 ```bash
 # Basic build (uses system architecture)
 ./build-image.sh -i myregistry.com/myimage:latest
@@ -252,12 +252,12 @@ OPTIONS:
 
 ---
 
-## Bootc Image Exporter (`export-image.sh`)
+### Bootc Image Exporter (`export-image.sh`)
 
-### Purpose
+#### Purpose
 This bash script exports bootc container images to various disk formats using the bootc-image-builder tool. It converts container images into bootable system images for different platforms and virtualization environments.
 
-### Key Features
+#### Key Features
 - **Multiple output formats**: Supports anaconda-iso (default), qcow2, ami, vmdk, raw, vhd, and gce formats
 - **Architecture handling**: Auto-detects system architecture with support for cross-architecture exports
 - **Registry management**: Handles authentication for both builder image and target image registries
@@ -265,7 +265,7 @@ This bash script exports bootc container images to various disk formats using th
 - **Privileged operations**: Manages sudo requirements for container operations
 - **Smart image pulling**: Attempts anonymous pulls before requiring authentication
 
-### Usage
+#### Usage
 ```bash
 ./export-image.sh [OPTIONS] -i IMAGE
 
@@ -279,7 +279,7 @@ OPTIONS:
   -h                   Show this help message
 ```
 
-### Supported Export Formats
+#### Supported Export Formats
 - **anaconda-iso**: Bootable ISO image (default)
 - **qcow2**: QEMU/KVM virtual disk format
 - **ami**: Amazon Machine Image format
@@ -288,7 +288,7 @@ OPTIONS:
 - **vhd**: Hyper-V virtual hard disk format
 - **gce**: Google Compute Engine format
 
-### Examples
+#### Examples
 ```bash
 # Export to ISO (default format)
 ./export-image.sh -i myregistry.com/myimage:latest
@@ -300,13 +300,13 @@ OPTIONS:
 ./export-image.sh -i myregistry.com/myimage:latest -f ami -t custom-config.toml -o /path/to/exports
 ```
 
-### Requirements
+#### Requirements
 - **sudo access**: Required for privileged container operations
 - **config.toml**: Configuration file must exist (default: ./config.toml)
 - **bootc-image-builder**: Uses Red Hat's bootc-image-builder container
 
-### Known Issues
+#### Known Issues
 - References GitHub issue #927 in osbuild/bootc-image-builder
 
-### Registry Configuration
+#### Registry Configuration
 The script uses `registry.redhat.io/rhel9/bootc-image-builder:latest` as the default builder image, with an alternative CentOS option available in comments.
