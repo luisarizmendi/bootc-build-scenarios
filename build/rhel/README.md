@@ -169,10 +169,10 @@ Choose the appropriate `--type` parameter based on your target environment:
 Here's a complete example building a QEMU-compatible image:
 
 ```bash
-# 1. Create project
+# Create project
 mkdir my-web-server && cd my-web-server
 
-# 2. Create Containerfile
+# Create Containerfile
 cat << 'EOF' > Containerfile
 FROM registry.redhat.io/rhel9/rhel-bootc:9.6
 RUN dnf -y install httpd && \
@@ -180,7 +180,7 @@ RUN dnf -y install httpd && \
     dnf clean all
 EOF
 
-# 3. Create config
+# Create config
 cat << 'EOF' > config.toml
 [[customizations.user]]
 name = "webadmin"
@@ -189,11 +189,11 @@ key = "ssh-rsa AAAAB3NzaC1yc2E... webadmin@company.com"
 groups = ["wheel"]
 EOF
 
-# 4. Build and push
+# Build and push
 podman build -t quay.io/myuser/web-server-bootc:latest .
 podman push quay.io/myuser/web-server-bootc:latest
 
-# 5. Generate QEMU image
+# Generate QEMU image
 mkdir output
 sudo podman pull quay.io/myuser/web-server-bootc:latest
 sudo podman run \
@@ -212,7 +212,7 @@ sudo podman run \
 In order to simplify the procedure I created some scripts that you can find under the `scripts` directory, for example:
 
 
-### Container Image Builder (`build-image.sh`)
+### Container Image Builder (`2.build.sh`)
 
 #### Purpose
 This bash script automates container image building using Podman with automatic architecture detection and cross-platform build support for bootc (boot container) images.
@@ -250,7 +250,7 @@ OPTIONS:
 
 ---
 
-### Bootc Image Exporter (`export-image.sh`)
+### Bootc Image Exporter (`3-export.sh`)
 
 #### Purpose
 This bash script exports bootc container images to various disk formats using the bootc-image-builder tool. It converts container images into bootable system images for different platforms and virtualization environments.
