@@ -9,6 +9,9 @@ The image is pushed to the **GitHub Container Registry (GHCR)**.
 
 ## How the Workflow Works
 
+
+![gha_pipeline.png](../../doc/gha_pipeline.png)
+
 1. **Setup**
    - Reads input parameters or defaults.
    - Generates a build matrix for different platforms and formats.
