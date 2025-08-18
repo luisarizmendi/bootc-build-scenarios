@@ -4,6 +4,7 @@ This directory contains a GitHub Actions workflow (`.github/workflows/build.yml`
 
 The image is pushed to the **GitHub Container Registry (GHCR)**.
 
+This is a simple workflow, if you want to take a look to a more advanced one you can check [this one](https://github.com/luisarizmendi/rhem-demo/blob/main/.github/workflows/build.yml) that automatically build images when there are changes in certain directories and it manages the image automatic versioning depending on the already registered image labels.
 
 ---
 
