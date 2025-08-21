@@ -6,7 +6,7 @@ The image is pushed to the **GitHub Container Registry (GHCR)** by default, but 
 
 This workflow uses a **subscribed UBI container** approach, which eliminates the need to handle Red Hat subscriptions within your Containerfile. The subscription is managed at the workflow level, making your Containerfile cleaner and more secure.
 
-This is a simple workflow, if you want to take a look to a more advanced one you can check [this one](https://github.com/luisarizmendi/rhem-demo/blob/main/.github/workflows/build.yml) that automatically build images when there are changes in certain directories and it manages the image automatic versioning depending on the already registered image labels.
+This is a simple workflow, if you want to take a look to a more advanced one you can check [this repo](https://github.com/luisarizmendi/bootc-images) or [this workflow](https://github.com/luisarizmendi/rhem-demo/blob/main/.github/workflows/build.yml), those automatically build images when there are changes in certain directories and it manages the image automatic versioning depending on the already registered image labels.
 
 ---
 
