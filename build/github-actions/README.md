@@ -94,34 +94,6 @@ If you need different credentials for pulling from registry.redhat.io:
 
 ---
 
-## Configuration Summary
-
-### Required Secrets (Minimum Setup)
-Choose one authentication method:
-
-**Username/Password:**
-- `RH_USERNAME`: Your Red Hat username
-- `RH_PASSWORD`: Your Red Hat password
-
-**OR Organization/Activation Key:**
-- `RHT_ORGID`: Your Red Hat organization ID  
-- `RHT_ACT_KEY`: Your Red Hat activation key
-
-### Optional Configuration
-
-**Repository Variables:**
-- `DEST_REGISTRY_HOST`: Destination registry (default: `ghcr.io`)
-- `DEST_REGISTRY_USER`: Registry username (default: GitHub actor)
-- `DEST_IMAGE`: Image name (default: `{owner}/bootc-example`)
-- `TAGLIST`: Image tags (default: `latest {sha} {branch}`)
-
-**Repository Secrets:**
-- `DEST_REGISTRY_PASSWORD`: Registry password (default: GitHub token)
-- `SOURCE_REGISTRY_USER`: Source registry username override
-- `SOURCE_REGISTRY_PASSWORD`: Source registry password override
-
----
-
 ## Usage
 
 ### Automatic Triggers
@@ -146,23 +118,5 @@ The workflow creates:
 Built images are available in your repository's **Packages** section, accessible at:
 ```
 https://github.com/{username}/{repository}/pkgs/container/{image-name}
-```
-
----
-
-## Example Containerfile
-
-With this workflow approach, your Containerfile can be much simpler since subscription handling is done at the workflow level:
-
-```dockerfile
-FROM registry.redhat.io/rhel9/rhel-bootc:9.6
-
-# Install packages - no subscription needed since the host is subscribed
-RUN dnf -y install tmux python3-pip && \
-    pip3 install podman-compose && \
-    dnf clean all
-
-# Add your customizations here
-COPY config/ /etc/
 ```
 
