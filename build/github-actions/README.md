@@ -1,29 +1,34 @@
 # Build bootc Image with GitHub Actions
 
-This directory contains a GitHub Actions workflow (`.github/workflows/build.yml`) that builds a **bootc image** for multiple platforms and exports it in various formats.
+This directory contains a GitHub Actions workflow (`.github/workflows/build.yml`) that builds a **bootc image** for multiple platforms and exports it in various formats. It is based on [this one](https://github.com/redhat-cop/redhat-image-mode-actions/blob/main/.github/workflows/build_rhel_bootc.yml)
 
-The image is pushed to the **GitHub Container Registry (GHCR)**.
+The image is pushed to the **GitHub Container Registry (GHCR)** by default, but can be configured to push to any container registry.
 
-This is a simple workflow based on subscribing the build container, if you want to take a look to a more advanced one you can check [this one](https://github.com/luisarizmendi/rhem-demo/blob/main/.github/workflows/build.yml) that automatically build images when there are changes in certain directories and it manages the image automatic versioning depending on the already registered image labels, [or this one](https://github.com/redhat-cop/redhat-image-mode-actions/blob/main/.github/workflows/build_rhel_bootc.yml) that performs the subscription in the workflow.
+This workflow uses a **subscribed UBI container** approach, which eliminates the need to handle Red Hat subscriptions within your Containerfile. The subscription is managed at the workflow level, making your Containerfile cleaner and more secure.
+
+This is a simple workflow, if you want to take a look to a more advanced one you can check [this one](https://github.com/luisarizmendi/rhem-demo/blob/main/.github/workflows/build.yml) that automatically build images when there are changes in certain directories and it manages the image automatic versioning depending on the already registered image labels.
 
 ---
 
 ## How the Workflow Works
 
-
 ![gha_pipeline.png](../../doc/gha_pipeline.png)
 
 1. **Setup**
    - Reads input parameters or defaults.
-   - Generates a build matrix for different platforms and formats.
+   - Generates a build matrix for different platforms.
 2. **Build**
-   - Uses `bootc` to build the image (x86 and ARM).
-   - Creates a multi-arch container image manifest with both architectures
-3. **Push**
-   - Pushes the resulting container images to the **GitHub Container Registry**.
+   - Runs in a subscribed UBI9 container with container tools installed
+   - Registers with Red Hat using credentials or activation keys
+   - Uses `buildah` to build multi-platform bootc images
+   - Automatically unregisters subscription when complete
+3. **Multi-Platform Manifest**
+   - Creates unified multi-arch container image manifests
+   - Supports both x86_64 and ARM64 architectures
+4. **Push**
+   - Pushes the resulting container images to the configured container registry
 
-**⚠️ Note:** This workflow only builds the image, do not create the installable artifacts with `bootc-image-builder` because in order to do that you will need to create a custom runner (with x86 and ARM RHEL) and I wanted to keep this simple. You might create the installable artifacts based on the generated image by this GitHub actions workflow by using the method mentioned in the RHEL and Non-RHEL scenarions.
-
+**⚠️ Note:** This workflow focuses on building the base bootc container images. For creating installable artifacts with `bootc-image-builder`, you would need custom runners with RHEL subscriptions. You can create installable artifacts from the generated images using the methods mentioned in other scenarios.
 
 ---
 
@@ -38,7 +43,6 @@ The workflow file must be located at:
 
 If it's placed elsewhere, GitHub Actions will **not** detect it.
 
-
 ### 2. Enable Required Workflow Permissions
 
 To allow the workflow to read repository contents and push packages:
@@ -49,40 +53,116 @@ To allow the workflow to read repository contents and push packages:
    - ✅ **Read repository contents and packages permissions**
 4. Click **Save**.
 
-### 3. Include your Red Hat user and password
+### 3. Configure Red Hat Credentials
 
-To allow pulling the base RHEL bootc image from the Red Hat registry you need your credentials:
+The workflow supports two authentication methods with Red Hat:
 
+#### Option 1: Username/Password (Default)
 1. Go to **Repository Settings** → **Secrets and variables** → **Actions**.
 2. Add the following **Repository secrets**:
-   - `RH_USERNAME`: Your Red Hat registry username
-   - `RH_PASSWORD`: Your Red Hat registry password
+   - `RH_USERNAME`: Your Red Hat username
+   - `RH_PASSWORD`: Your Red Hat password
 
+#### Option 2: Organization ID/Activation Key (Optional)
+If you prefer to use activation keys:
+1. Add these **Repository secrets** instead:
+   - `RHT_ORGID`: Your Red Hat organization ID
+   - `RHT_ACT_KEY`: Your Red Hat activation key
 
-### 4. (Optional) Create a Personal Access Token (PAT)
+The workflow will automatically detect which method to use based on available secrets.
 
-The workflow does not need a PAT, but you will need it if you want to push anything into the **GitHub Container Registry (GHCR)**, for example in a further step you would like to push a container image with the installable artifact generated by `bootc-image-builder` embeded on it (more on why embedding artifacts in OCI registries in the [OpenShift scenario](../openshift/))
+### 4. (Optional) Configure Custom Registry Settings
 
-If that's your case, follow the steps below.
+By default, images are pushed to GitHub Container Registry (GHCR). To use a different registry:
 
-#### Steps:
-1. Go to [GitHub Personal Access Tokens](https://github.com/settings/tokens).
-2. Click **Generate new token** → **Classic**.
-3. Add a note (e.g., *"GHCR push token"*).
-4. Set expiration (optional but recommended).
-5. Under **Scopes**, select:
-   - `write:packages`
-   - `read:packages`
-   - `repo` (if the repository is private)
-6. Click **Generate token**.
-7. Copy the token (you won’t see it again).
+1. Go to **Repository Settings** → **Secrets and variables** → **Actions**.
+2. Under **Variables**, add any of:
+   - `DEST_REGISTRY_HOST`: Custom registry hostname (default: `ghcr.io`)
+   - `DEST_REGISTRY_USER`: Custom registry username (default: `github.actor`)
+   - `DEST_IMAGE`: Custom image name (default: `{owner}/bootc-example`)
+   - `TAGLIST`: Custom tags (default: `latest {sha} {branch}`)
+3. Under **Secrets**, add:
+   - `DEST_REGISTRY_PASSWORD`: Custom registry password (default: `GITHUB_TOKEN`)
 
-**⚠️ Note:** Use your GitHub username as **GitHub Container Registry (GHCR)** username and the PAT as password to login 
+### 5. (Optional) Override Source Registry Credentials
+
+If you need different credentials for pulling from registry.redhat.io:
+
+1. Add these **Repository secrets**:
+   - `SOURCE_REGISTRY_USER`: Registry username (defaults to `RH_USERNAME`)
+   - `SOURCE_REGISTRY_PASSWORD`: Registry password (defaults to `RH_PASSWORD`)
+
+---
+
+## Configuration Summary
+
+### Required Secrets (Minimum Setup)
+Choose one authentication method:
+
+**Username/Password:**
+- `RH_USERNAME`: Your Red Hat username
+- `RH_PASSWORD`: Your Red Hat password
+
+**OR Organization/Activation Key:**
+- `RHT_ORGID`: Your Red Hat organization ID  
+- `RHT_ACT_KEY`: Your Red Hat activation key
+
+### Optional Configuration
+
+**Repository Variables:**
+- `DEST_REGISTRY_HOST`: Destination registry (default: `ghcr.io`)
+- `DEST_REGISTRY_USER`: Registry username (default: GitHub actor)
+- `DEST_IMAGE`: Image name (default: `{owner}/bootc-example`)
+- `TAGLIST`: Image tags (default: `latest {sha} {branch}`)
+
+**Repository Secrets:**
+- `DEST_REGISTRY_PASSWORD`: Registry password (default: GitHub token)
+- `SOURCE_REGISTRY_USER`: Source registry username override
+- `SOURCE_REGISTRY_PASSWORD`: Source registry password override
 
 ---
 
 ## Usage
 
-In order to trigger the workflow just push the Containerfile and the associated files into the root directory of the repository where you created the `.github/workflows/build.yml` file.
+### Automatic Triggers
+The workflow automatically runs when:
+- You push to the `main` branch
+- You manually trigger it via the Actions tab
 
-You will find the generated container images by reviewing the repository "Packages".
+### Manual Trigger with Custom Parameters
+1. Go to **Actions** → **Build bootc image with artifacts**
+2. Click **Run workflow**
+3. Configure:
+   - **Platforms**: Comma-separated (default: `linux/amd64,linux/arm64`)
+   - **Formats**: Comma-separated (default: `anaconda-iso,qcow2`)
+
+### What Gets Built
+The workflow creates:
+- **Platform-specific images**: Tagged with architecture suffix (e.g., `latest-amd64`)
+- **Multi-platform manifests**: Unified tags that work across architectures
+- **Multiple tags**: Including `latest`, commit SHA, and branch name
+
+### Finding Your Images
+Built images are available in your repository's **Packages** section, accessible at:
+```
+https://github.com/{username}/{repository}/pkgs/container/{image-name}
+```
+
+---
+
+## Example Containerfile
+
+With this workflow approach, your Containerfile can be much simpler since subscription handling is done at the workflow level:
+
+```dockerfile
+FROM registry.redhat.io/rhel9/rhel-bootc:9.6
+
+# Install packages - no subscription needed since the host is subscribed
+RUN dnf -y install tmux python3-pip && \
+    pip3 install podman-compose && \
+    dnf clean all
+
+# Add your customizations here
+COPY config/ /etc/
+```
+

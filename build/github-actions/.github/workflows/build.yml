@@ -32,37 +32,36 @@ jobs:
             PLATFORMS="${{ github.event.inputs.platforms }}"
             FORMATS="${{ github.event.inputs.formats }}"
           else
-
             PLATFORMS="linux/amd64,linux/arm64"
             FORMATS="anaconda-iso,qcow2"
           fi
-          
+
           echo "platforms=$PLATFORMS" >> $GITHUB_OUTPUT
           echo "formats=$FORMATS" >> $GITHUB_OUTPUT
           echo "Building for platforms: $PLATFORMS"
           echo "Building formats: $FORMATS"
-          
+
           # Create matrix for build jobs
           MATRIX='{"include":['
           IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
           for i in "${!PLATFORM_ARRAY[@]}"; do
             PLATFORM="${PLATFORM_ARRAY[i]}"
             ARCH="${PLATFORM#linux/}"
-            
+
             if [ "$i" -gt 0 ]; then
               MATRIX="${MATRIX},"
             fi
-            
+
             if [ "$ARCH" = "arm64" ]; then
               RUNNER="ubuntu-24.04-arm"
             else
               RUNNER="ubuntu-latest"
             fi
-            
+
             MATRIX="${MATRIX}{\"platform\":\"$PLATFORM\",\"arch\":\"$ARCH\",\"runner\":\"$RUNNER\"}"
           done
           MATRIX="${MATRIX}]}"
-          
+
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
           echo "Matrix: $MATRIX"
 
@@ -78,55 +77,75 @@ jobs:
       image: ${{ steps.build.outputs.image }}
       tags: ${{ steps.build.outputs.tags }}
     env:
-      IMAGE_NAME: bootc-example
-      REGISTRY: ghcr.io/${{ github.repository_owner }}
+      # Disable Subscription Manager container passthrough
+      SMDEV_CONTAINER_OFF: 1
+      # Source registry for base image
+      SOURCE_REGISTRY_HOST: "registry.redhat.io"
+
+      # Destination image configuration
+      DEST_IMAGE: "${{ vars.DEST_IMAGE || format('{0}/{1}', github.repository_owner, 'bootc-example') }}"
+      TAGLIST: "${{ vars.TAGLIST || format('latest {0} {1}', github.sha, github.ref_name) }}"
+      DEST_REGISTRY_HOST: "${{ vars.DEST_REGISTRY_HOST || 'ghcr.io' }}"
+      DEST_REGISTRY_USER: "${{ vars.DEST_REGISTRY_USER || github.actor }}"
+      DEST_REGISTRY_PASSWORD: "${{ secrets.DEST_REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}"
+    container:
+      image: registry.access.redhat.com/ubi9/ubi
+      options: --privileged
+    permissions:
+      contents: write
+      packages: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Get container tools in UBI builder
+        run: dnf -y install podman buildah skopeo
+
+      - name: Register with Red Hat subscription manager
+        run: |
+          if [ -n "${{ secrets.RHT_ORGID }}" ] && [ -n "${{ secrets.RHT_ACT_KEY }}" ]; then
+            echo "Registering with organization ID and activation key..."
+            subscription-manager register --org=${{ secrets.RHT_ORGID }} --activationkey=${{ secrets.RHT_ACT_KEY }}
+          else
+            echo "Registering with username and password..."
+            subscription-manager register --username=${{ secrets.RH_USERNAME }} --password=${{ secrets.RH_PASSWORD }}
+          fi
+
+      # workaround for https://github.com/redhat-actions/podman-login/issues/42
+      - name: Workaround open podman-login action issue
+        env:
+          auth: "{ \"auths\": {} }"
+        run: |
+          mkdir -p $HOME/.docker
+          echo $auth > $HOME/.docker/config.json
+
       - name: Log in to Red Hat Registry
         uses: redhat-actions/podman-login@v1
         with:
-          registry: registry.redhat.io
-          username: ${{ secrets.RH_USERNAME }}
-          password: ${{ secrets.RH_PASSWORD }}
-
-      - name: Prepare Buildah secrets for container subscription
-        run: |
-          echo "${{ secrets.RH_USERNAME }}" > secret-username
-          echo "${{ secrets.RH_PASSWORD }}" > secret-password
-          chmod 600 secret-username secret-password
+          registry: ${{ env.SOURCE_REGISTRY_HOST }}
+          username: ${{ secrets.SOURCE_REGISTRY_USER || secrets.RH_USERNAME }}
+          password: ${{ secrets.SOURCE_REGISTRY_PASSWORD || secrets.RH_PASSWORD }}
+          auth_file_path: /run/containers/0/auth.json
 
       - name: Build platform-specific image with Buildah
         id: build
         uses: redhat-actions/buildah-build@v2
         with:
-          image: ${{ env.IMAGE_NAME }}
+          image: ${{ env.DEST_IMAGE }}
           tags: |
             latest-${{ matrix.arch }}
             ${{ github.sha }}-${{ matrix.arch }}
           platforms: ${{ matrix.platform }}
           containerfiles: |
             ./Containerfile
-          extra-args: |
-            --secret id=username,src=secret-username
-            --secret id=password,src=secret-password
-            --pull=always
-
-      - name: Cleanup secret files
-        run: rm -f secret-username secret-password
-
-      - name: Setup empty Docker config
-        run: |
-          mkdir -p $HOME/.docker
-          echo '{ "auths": {} }' > $HOME/.docker/config.json
 
       - name: Log in to GitHub Container Registry
         uses: redhat-actions/podman-login@v1
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ${{ env.DEST_REGISTRY_HOST }}
+          username: ${{ env.DEST_REGISTRY_USER }}
+          password: ${{ env.DEST_REGISTRY_PASSWORD }}
+          auth_file_path: /run/containers/0/auth.json
 
       - name: Push platform-specific image to GHCR
         id: push
@@ -134,7 +153,11 @@ jobs:
         with:
           image: ${{ steps.build.outputs.image }}
           tags: ${{ steps.build.outputs.tags }}
-          registry: ${{ env.REGISTRY }}
+          registry: ${{ env.DEST_REGISTRY_HOST }}
+
+      - name: Clean up the subscription
+        if: always()
+        run: subscription-manager unregister
 
   # Job: Create multi-platform manifest
   create-manifest:
@@ -142,8 +165,10 @@ jobs:
     needs: [setup, build-image]
     runs-on: ubuntu-latest
     env:
-      IMAGE_NAME: bootc-example
-      REGISTRY: ghcr.io/${{ github.repository_owner }}
+      DEST_IMAGE: "${{ vars.DEST_IMAGE || format('{0}/{1}', github.repository_owner, 'bootc-example') }}"
+      DEST_REGISTRY_HOST: "${{ vars.DEST_REGISTRY_HOST || 'ghcr.io' }}"
+      DEST_REGISTRY_USER: "${{ vars.DEST_REGISTRY_USER || github.actor }}"
+      DEST_REGISTRY_PASSWORD: "${{ secrets.DEST_REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}"
     outputs:
       manifest-latest: ${{ steps.create.outputs.manifest-latest }}
       manifest-sha: ${{ steps.create.outputs.manifest-sha }}
@@ -151,239 +176,68 @@ jobs:
       - name: Log in to GitHub Container Registry
         uses: redhat-actions/podman-login@v1
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ${{ env.DEST_REGISTRY_HOST }}
+          username: ${{ env.DEST_REGISTRY_USER }}
+          password: ${{ env.DEST_REGISTRY_PASSWORD }}
 
       - name: Create and push multi-platform manifest
         id: create
         run: |
           set -euo pipefail
-          
-          IMAGE_BASE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+
+          IMAGE_BASE="${{ env.DEST_REGISTRY_HOST }}/${{ env.DEST_IMAGE }}"
           LATEST_MANIFEST="${IMAGE_BASE}:latest"
           SHA_MANIFEST="${IMAGE_BASE}:${{ github.sha }}"
-          
+
           echo "Creating multi-platform manifests..."
           echo "Latest manifest: $LATEST_MANIFEST"
           echo "SHA manifest: $SHA_MANIFEST"
-          
+
           # Remove existing manifests if they exist
           podman manifest rm "$LATEST_MANIFEST" 2>/dev/null || true
           podman manifest rm "$SHA_MANIFEST" 2>/dev/null || true
-          
+
           # Create new manifests
           podman manifest create "$LATEST_MANIFEST"
           podman manifest create "$SHA_MANIFEST"
-          
+
           # Add platform-specific images to manifests
           IFS=',' read -ra PLATFORM_ARRAY <<< "${{ needs.setup.outputs.platforms }}"
           for PLATFORM in "${PLATFORM_ARRAY[@]}"; do
             ARCH="${PLATFORM#linux/}"
             PLATFORM_LATEST="${IMAGE_BASE}:latest-${ARCH}"
             PLATFORM_SHA="${IMAGE_BASE}:${{ github.sha }}-${ARCH}"
-            
+
             echo "Processing platform: $PLATFORM (arch: $ARCH)"
             echo "  Adding $PLATFORM_LATEST to latest manifest"
             echo "  Adding $PLATFORM_SHA to SHA manifest"
-            
+
             # Add to manifests with proper architecture specification
             podman manifest add --arch "$ARCH" --os "linux" "$LATEST_MANIFEST" "docker://$PLATFORM_LATEST"
             podman manifest add --arch "$ARCH" --os "linux" "$SHA_MANIFEST" "docker://$PLATFORM_SHA"
           done
-          
+
           echo "Inspecting created manifests..."
           podman manifest inspect "$LATEST_MANIFEST"
           podman manifest inspect "$SHA_MANIFEST"
-          
+
           echo "Pushing multi-platform manifests..."
           podman manifest push --all "$LATEST_MANIFEST" "docker://$LATEST_MANIFEST"
           podman manifest push --all "$SHA_MANIFEST" "docker://$SHA_MANIFEST"
-          
+
           echo "Multi-platform manifests created and pushed successfully!"
           echo "manifest-latest=$LATEST_MANIFEST" >> $GITHUB_OUTPUT
           echo "manifest-sha=$SHA_MANIFEST" >> $GITHUB_OUTPUT
 
-
-  ##
-  # Need custom RHEL runner for subscriptions 
-  #
-  ##
-  # # Matrix job: Build artifacts for each platform/format combination
-  # build-artifacts:
-  #   name: Build artifacts
-  #   needs: [setup, build-image, create-manifest]
-  #   strategy:
-  #     fail-fast: false
-  #     matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
-  #   runs-on: ${{ matrix.runner }}
-  #   env:
-  #     REGISTRY: ghcr.io/${{ github.repository_owner }}
-  #     IMAGE_NAME: bootc-example
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-
-  #     - name: Parse platform
-  #       id: platform
-  #       run: |
-  #         echo "arch=${{ matrix.arch }}" >> $GITHUB_OUTPUT
-  #         echo "safe_arch=${{ matrix.arch }}" >> $GITHUB_OUTPUT
-
-  #     - name: Set up QEMU (only for cross-platform builds if needed)
-  #       if: matrix.platform != 'linux/amd64' && matrix.runner == 'ubuntu-latest'
-  #       uses: docker/setup-qemu-action@v3
-
-  #     - name: Enable binfmt_misc (only for emulated builds)
-  #       if: matrix.platform != 'linux/amd64' && matrix.runner == 'ubuntu-latest'
-  #       run: |
-  #         docker run --rm --privileged multiarch/qemu-user-static --reset -p yes || echo "binfmt setup completed"
-
-  #     - name: Log in to GitHub Container Registry
-  #       uses: redhat-actions/podman-login@v1
-  #       with:
-  #         registry: ${{ env.REGISTRY }}
-  #         username: ${{ github.actor }}
-  #         password: ${{ secrets.GITHUB_TOKEN }}
-
-  #     - name: Create config.toml if it doesn't exist
-  #       run: |
-  #         if [ ! -f config.toml ]; then
-  #           cat > config.toml << 'EOF'
-  #         [[runner]]
-  #         name = "org.osbuild.rhel90"
-  #         label = "rhel-9.0-x86_64"
-  #         distro = "rhel-90"
-  #         EOF
-  #         fi
-
-  #     - name: Build artifacts for each format
-  #       run: |
-  #         set -euo pipefail
-          
-  #         # Use the multi-platform manifest image for artifact building
-  #         IMAGE="${{ needs.create-manifest.outputs.manifest-sha }}"
-  #         PLATFORM="${{ matrix.platform }}"
-  #         ARCH="${{ matrix.arch }}"
-          
-  #         echo "Building artifacts from multi-platform image: $IMAGE"
-  #         echo "Target platform: $PLATFORM"
-  #         echo "Target architecture: $ARCH"
-          
-  #         # Parse formats from job output
-  #         IFS=',' read -ra FORMATS <<< "${{ needs.setup.outputs.formats }}"
-          
-  #         # Create output directory
-  #         mkdir -p ./bootc-exports/$ARCH
-          
-  #         for FORMAT in "${FORMATS[@]}"; do
-  #           echo "Building $FORMAT for $PLATFORM"
-            
-  #           IMAGE_NAME_TAG=$(basename "$IMAGE")
-  #           SANITIZED_NAME_TAG=$(echo "$IMAGE_NAME_TAG" | sed 's/:/_/')
-  #           DIR_NAME=$(echo "$SANITIZED_NAME_TAG" | sed 's/[^A-Za-z0-9._-]/_/g')
-  #           DIR_NAME=${DIR_NAME}-${FORMAT}
-            
-  #           OUTPUT_DIR="./bootc-exports/$ARCH/$DIR_NAME"
-  #           mkdir -p "$OUTPUT_DIR"
-            
-  #           # Pull the multi-platform image and let podman select the right arch
-  #           echo "Pulling multi-platform image: $IMAGE"
-  #           podman pull --platform=$PLATFORM $IMAGE
-            
-  #           echo "Building $FORMAT artifact for $ARCH architecture"
-            
-  #           # Run bootc-image-builder
-  #           sudo podman run \
-  #             --platform=$PLATFORM \
-  #             --rm \
-  #             --privileged \
-  #             --pull=newer \
-  #             --security-opt label=type:unconfined_t \
-  #             -v ./config.toml:/config.toml:z \
-  #             -v "$PWD/$OUTPUT_DIR:/output" \
-  #             -v /var/lib/containers/storage:/var/lib/containers/storage \
-  #             registry.redhat.io/rhel9/bootc-image-builder:latest \
-  #             --target-arch $ARCH \
-  #             --type $FORMAT \
-  #             --use-librepo=True \
-  #             $IMAGE
-            
-  #           echo "Artifact built successfully in $OUTPUT_DIR"
-  #           ls -la "$OUTPUT_DIR"
-            
-  #           # Upload artifact to OCI registry - use original image base for diskimage repo
-  #           IMAGE_BASE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
-  #           OCI_DISK_IMAGE_REPO=${IMAGE_BASE}/diskimage-${FORMAT}
-  #           OCI_IMAGE_TAG=${{ github.sha }}-${ARCH}
-            
-  #           # Create manifest
-  #           sudo podman manifest create ${OCI_DISK_IMAGE_REPO}:${OCI_IMAGE_TAG} || true
-            
-  #           # Determine artifact type and file path
-  #           case "$FORMAT" in
-  #             "anaconda-iso")
-  #               ARTIFACT_TYPE="application/vnd.diskimage.iso"
-  #               FILE_PATH="$OUTPUT_DIR/bootiso/install.iso"
-  #               ;;
-  #             "qcow2")
-  #               ARTIFACT_TYPE="application/vnd.diskimage.qcow2"
-  #               FILE_PATH="$OUTPUT_DIR/qcow2/disk.qcow2"
-  #               ;;
-  #             "vmdk")
-  #               ARTIFACT_TYPE="application/vnd.diskimage.vmdk"
-  #               FILE_PATH="$OUTPUT_DIR/vmdk/disk.vmdk"
-  #               ;;
-  #             "raw")
-  #               ARTIFACT_TYPE="application/vnd.diskimage.raw"
-  #               FILE_PATH="$OUTPUT_DIR/image/disk.raw"
-  #               ;;
-  #             *)
-  #               echo "Unknown format: $FORMAT"
-  #               continue
-  #               ;;
-  #           esac
-            
-  #           # Check if file exists
-  #           if [ ! -f "$FILE_PATH" ]; then
-  #             echo "Error: Expected file not found at $FILE_PATH"
-  #             echo "Available files:"
-  #             find "$OUTPUT_DIR" -type f
-  #             continue
-  #           fi
-            
-  #           echo "Adding artifact to manifest"
-  #           sudo podman manifest add \
-  #             --artifact --artifact-type $ARTIFACT_TYPE \
-  #             --arch $ARCH --os=linux \
-  #             ${OCI_DISK_IMAGE_REPO}:${OCI_IMAGE_TAG} \
-  #             "$FILE_PATH"
-            
-  #           echo "Pushing manifest to registry"
-  #           sudo podman manifest push --all \
-  #             ${OCI_DISK_IMAGE_REPO}:${OCI_IMAGE_TAG} \
-  #             docker://${OCI_DISK_IMAGE_REPO}:${OCI_IMAGE_TAG}
-            
-  #           echo "Successfully pushed $FORMAT artifact for $ARCH"
-  #         done
-
-  #     - name: Upload build artifacts
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: bootc-artifacts-${{ steps.platform.outputs.safe_arch }}
-  #         path: ./bootc-exports/
-  #         retention-days: 7
-
   # Summary job
   summary:
     name: Build Summary
-    #needs: [setup, build-image, create-manifest, build-artifacts]
     needs: [setup, build-image, create-manifest]
     runs-on: ubuntu-latest
     if: always()
     env:
-      IMAGE_NAME: bootc-example
-      REGISTRY: ghcr.io/${{ github.repository_owner }}
+      DEST_IMAGE: "${{ vars.DEST_IMAGE || format('{0}/{1}', github.repository_owner, 'bootc-example') }}"
+      DEST_REGISTRY_HOST: "${{ vars.DEST_REGISTRY_HOST || 'ghcr.io' }}"
     steps:
       - name: Print build summary
         run: |
@@ -392,17 +246,15 @@ jobs:
           echo "- Latest: ${{ needs.create-manifest.outputs.manifest-latest }}" >> $GITHUB_STEP_SUMMARY
           echo "- SHA: ${{ needs.create-manifest.outputs.manifest-sha }}" >> $GITHUB_STEP_SUMMARY
           echo "- Platforms: ${{ needs.setup.outputs.platforms }}" >> $GITHUB_STEP_SUMMARY
-          #echo "- Artifact Formats: ${{ needs.setup.outputs.formats }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Platform-specific Images" >> $GITHUB_STEP_SUMMARY
           IFS=',' read -ra PLATFORM_ARRAY <<< "${{ needs.setup.outputs.platforms }}"
           for PLATFORM in "${PLATFORM_ARRAY[@]}"; do
             ARCH="${PLATFORM#linux/}"
-            echo "- $ARCH: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-${ARCH}" >> $GITHUB_STEP_SUMMARY
+            echo "- $ARCH: ${{ env.DEST_REGISTRY_HOST }}/${{ env.DEST_IMAGE }}:${{ github.sha }}-${ARCH}" >> $GITHUB_STEP_SUMMARY
           done
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Build Status" >> $GITHUB_STEP_SUMMARY
           echo "- Setup: ${{ needs.setup.result }}" >> $GITHUB_STEP_SUMMARY
           echo "- Base Image Build: ${{ needs.build-image.result }}" >> $GITHUB_STEP_SUMMARY
           echo "- Manifest Creation: ${{ needs.create-manifest.result }}" >> $GITHUB_STEP_SUMMARY
-          #echo "- Artifact Build: ${{ needs.build-artifacts.result }}" >> $GITHUB_STEP_SUMMARY
