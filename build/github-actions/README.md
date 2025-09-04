@@ -257,16 +257,19 @@ The workflow can create the following installable formats:
 The workflow creates two types of outputs:
 
 1. **Bootc container images**: `ghcr.io/{owner}/bootc-{directory}:latest`
-2. **Artifact container images**: `ghcr.io/{owner}/bootc-{directory}-{format}:latest` (when artifacts are built)
+2. **Artifact container images**: `ghcr.io/{owner}/bootc-{directory}-{format}:{label}` (when artifacts are built)
+
+Note: Check in the **Packages** section in the repo the available images.
 
 To extract installable artifacts (ISOs, disk images, etc.) from the artifact container images:
 
 ```bash
 # Example: Extract an anaconda-iso artifact
 mkdir artifacts
-podman create --name temp-container ghcr.io/myorg/bootc-myimage-anaconda-iso:latest
+podman create --name temp-container ghcr.io/{owner}/bootc-{directory}-{format}:{label}
 podman cp temp-container:/ ./artifacts/
 podman rm temp-container
+podman rmi ghcr.io/{owner}/bootc-{directory}-{format}:{label}
 
 # The installable files will be in ./artifacts/
 ls -la artifacts/
