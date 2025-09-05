@@ -8,11 +8,11 @@ This workflow uses a **subscribed UBI container** approach, which eliminates the
 
 Store your images in designated folders within the repository's root directory. The workflow will automatically rebuild images whenever changes are detected in those folders.
 
+
+
 ---
 
 ## How the Workflow Works
-
-![gha_pipeline.png](../../doc/gha_pipeline.png)
 
 1. **Setup**
    - Reads input parameters or defaults
@@ -29,6 +29,7 @@ Store your images in designated folders within the repository's root directory. 
 
 3. **Build Artifacts** (Optional)
    - Uses `bootc-image-builder` to create installable artifacts
+   - Supports custom artifact configuration via optional `config.toml` files
    - Packages artifacts into container images for easy distribution
    - Supports multiple formats and platforms simultaneously
 
@@ -55,7 +56,25 @@ Once it is created place the `.github/workflows/build.yml` at the root of your r
 
 If it's placed elsewhere, GitHub Actions will **not** detect it.
 
-Then create directories at the root level with your different images.
+Then create directories at the root level with your different images. Example directory structure:
+
+**Note:** More information about the `.buildconfig ` in a section below.
+
+```
+my-arm64-only-image/
+├── Containerfile
+├── config.toml           
+├── .buildconfig          
+└── other-files...
+
+my-image-with-artifacts/
+├── Containerfile
+├── .buildconfig          
+
+my-minimal-image/
+├── Containerfile         
+└── other-files...
+```
 
 You have an [example of how your repo should look like here](https://github.com/luisarizmendi/bootc-images).
 
@@ -133,87 +152,7 @@ Choose one authentication method:
 - `SOURCE_REGISTRY_USER`: Source registry username override
 - `SOURCE_REGISTRY_PASSWORD`: Source registry password override
 
----
 
-## Architecture and Artifact Configuration
-
-### .buildconfig File Options
-
-You can control build behavior by adding a `.buildconfig` file to any image directory:
-
-```yaml
-# Restrict platforms (default: linux/amd64,linux/arm64)
-platforms: linux/arm64
-
-# Control artifact creation
-artifacts: true|false|auto    # default: auto (create if none exist)
-
-# Specify artifact formats (default: anaconda-iso)
-artifact_formats: anaconda-iso,qcow2,vmdk
-```
-
-### Restricting Build Architectures
-
-To restrict an image to specific architectures:
-
-```yaml
-# Build only for ARM64
-platforms: linux/arm64
-```
-
-```yaml
-# Build only for AMD64  
-platforms: linux/amd64
-```
-
-```yaml
-# Build for both architectures (same as no .buildconfig file)
-platforms: linux/amd64,linux/arm64
-```
-
-### Controlling Artifact Creation
-
-```yaml
-# Always create artifacts
-artifacts: true
-artifact_formats: anaconda-iso,qcow2
-
-# Never create artifacts
-artifacts: false
-
-# Create artifacts only if none exist yet (default behavior)
-artifacts: auto
-```
-
-### Example Directory Structure
-
-```
-my-arm64-only-image/
-├── Containerfile
-├── .buildconfig          # Contains: platforms: linux/arm64
-└── other-files...
-
-my-image-with-artifacts/
-├── Containerfile
-├── .buildconfig          # Contains: artifacts: true, artifact_formats: anaconda-iso,qcow2
-└── other-files...
-
-my-regular-image/
-├── Containerfile         # No .buildconfig = builds for all platforms, auto artifacts
-└── other-files...
-```
-
----
-
-## Manual Workflow Triggers
-
-You can manually trigger builds with custom parameters:
-
-1. Go to **Actions** → **Build bootc images**
-2. Click **Run workflow**
-3. Configure:
-   - **Platforms**: `linux/amd64,linux/arm64` (or subset)
-   - **Formats**: `anaconda-iso,qcow2,vmdk` (or subset)
 
 ---
 
@@ -275,6 +214,110 @@ podman rmi ghcr.io/{owner}/bootc-{directory}-{format}:{label}
 ls -la artifacts/
 ```
 
+
+
+---
+
+## Architecture and Artifact Configuration
+
+### .buildconfig File Options
+
+You can control build behavior by adding a `.buildconfig` file to any image directory:
+
+```yaml
+# Restrict platforms (default: linux/amd64,linux/arm64)
+platforms: linux/arm64
+
+# Control artifact creation
+artifacts: true|false|auto    # default: auto (create if none exist)
+
+# Specify artifact formats (default: anaconda-iso)
+artifact_formats: anaconda-iso,qcow2,vmdk
+```
+
+Examples restricting an image to specific architectures:
+
+```yaml
+# Build only for ARM64
+platforms: linux/arm64
+```
+
+```yaml
+# Build only for AMD64  
+platforms: linux/amd64
+```
+
+```yaml
+# Build for both architectures (same as no .buildconfig file)
+platforms: linux/amd64,linux/arm64
+```
+
+Example controlling Artifact Creation:
+
+```yaml
+# Always create artifacts
+artifacts: true
+artifact_formats: anaconda-iso,qcow2
+
+# Never create artifacts
+artifacts: false
+
+# Create artifacts only if none exist yet (default behavior)
+artifacts: auto
+```
+
+### config.toml File for Artifact Customization
+
+You can customize installable artifacts by adding an optional `config.toml` file to any image directory. This file will be passed to `bootc-image-builder` to configure the artifact creation process.
+
+The `config.toml` file supports various configuration options such as:
+- User accounts and SSH keys
+- Filesystem customizations
+- Network configuration
+- Package installation/removal
+- System services configuration
+- And other bootc-image-builder options
+
+**Important**: The `config.toml` file is completely optional. If it doesn't exist, artifacts will be created with default settings.
+
+
+Here's an example `config.toml` file that creates a user account with sudo access:
+
+```toml
+[[customizations.user]]
+name = "admin"
+password = "redhat"
+groups = ["wheel"]
+```
+
+Or the same file but with the password encripted with `openssl passwd -6 "redhat"`
+
+```toml
+[[customizations.user]]
+name = "admin"
+password = "$6$/7rTITXmb1xpkB52$1L6xl53aTMayMIqhdxh6VxLGguy2CUxxf50oqcJGElUgcyx/8nTIEBKtvP6erLtwwLS5B6ZyCEDkrZMGC8ydN/"
+groups = ["wheel"]
+```
+
+For more configuration options, consult the bootc-image-builder documentation.
+
+
+
+
+
+
+---
+
+## Manual Workflow Triggers
+
+You can manually trigger builds with custom parameters:
+
+1. Go to **Actions** → **Build bootc images**
+2. Click **Run workflow**
+3. Configure:
+   - **Platforms**: `linux/amd64,linux/arm64` (or subset)
+   - **Formats**: `anaconda-iso,qcow2,vmdk` (or subset)
+
 ## Important Notes About GitHub Runner Limitations
 
 This workflow uses GitHub's free hosted runners, which have limited disk space:
@@ -292,3 +335,17 @@ If you experience disk space failures during artifact creation, consider these a
 2. **Use self-hosted runners**: Set up your own GitHub Actions runners with more disk space and configure the workflow to use them.
 
 3. **Upgrade to larger GitHub runners**: GitHub offers larger runners with more disk space as part of their paid plans. You can configure the workflow to use these by updating the runner specifications in the build matrix.
+
+
+
+
+
+
+
+
+
+
+
+
+
+

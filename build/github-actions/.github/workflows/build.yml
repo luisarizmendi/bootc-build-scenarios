@@ -113,25 +113,25 @@ jobs:
           check_existing_artifacts() {
             local image_base="$1"
             local artifact_formats="$2"
-            
+
             # Check each artifact format separately
             IFS=',' read -ra FORMAT_ARRAY <<< "$artifact_formats"
-            
+
             for format in "${FORMAT_ARRAY[@]}"; do
               local artifact_image_base="${image_base}-${format}"
               local existing_tags=""
-              
+
               if skopeo list-tags "docker://${artifact_image_base}" >/tmp/check_tags_${format}.json 2>/dev/null; then
                 existing_tags=$(jq -r '.Tags[]' /tmp/check_tags_${format}.json 2>/dev/null | \
                   grep -E '^v[0-9]+(-[^-]+)?$' || echo "")
-                
+
                 if [ -n "$existing_tags" ]; then
                   echo "true"
                   return 0
                 fi
               fi
             done
-            
+
             echo "false"
           }
 
@@ -470,7 +470,7 @@ jobs:
 
       - name: Get container tools in UBI builder
         run: |
-          dnf -y install podman buildah skopeo jq 
+          dnf -y install podman buildah skopeo jq
           dnf clean all
 
       - name: Register with Red Hat subscription manager
@@ -563,7 +563,16 @@ jobs:
 
           echo "Creating ${{ matrix.format }} artifact for $IMAGE"
 
-          # Run bootc-image-builder
+          # Check if config.toml exists in the directory
+          CONFIG_MOUNT=""
+          if [ -f "./${{ matrix.dir }}/config.toml" ]; then
+            echo "Found config.toml for ${{ matrix.dir }}, will mount it"
+            CONFIG_MOUNT="-v ./${{ matrix.dir }}/config.toml:/config.toml:ro"
+          else
+            echo "No config.toml found for ${{ matrix.dir }}, proceeding without custom configuration"
+          fi
+
+          # Run bootc-image-builder with conditional config mount
           podman run \
             --rm \
             --privileged \
@@ -571,6 +580,7 @@ jobs:
             --security-opt label=type:unconfined_t \
             -v ./output:/output \
             -v /var/lib/containers/storage:/var/lib/containers/storage \
+            ${CONFIG_MOUNT} \
             quay.io/centos-bootc/bootc-image-builder:latest \
             --type ${{ matrix.format }} \
             --use-librepo=True \
