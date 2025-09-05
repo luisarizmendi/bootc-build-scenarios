@@ -1,0 +1,8 @@
+title = "Gitleaks Configuration"
+
+[allowlist]
+description = "Ignore specific files"
+paths = [
+    ".*/README.md",
+    ".*/config.toml",
+]
