@@ -113,25 +113,25 @@ jobs:
           check_existing_artifacts() {
             local image_base="$1"
             local artifact_formats="$2"
-
+            
             # Check each artifact format separately
             IFS=',' read -ra FORMAT_ARRAY <<< "$artifact_formats"
-
+            
             for format in "${FORMAT_ARRAY[@]}"; do
               local artifact_image_base="${image_base}-${format}"
               local existing_tags=""
-
+              
               if skopeo list-tags "docker://${artifact_image_base}" >/tmp/check_tags_${format}.json 2>/dev/null; then
                 existing_tags=$(jq -r '.Tags[]' /tmp/check_tags_${format}.json 2>/dev/null | \
                   grep -E '^v[0-9]+(-[^-]+)?$' || echo "")
-
+                
                 if [ -n "$existing_tags" ]; then
                   echo "true"
                   return 0
                 fi
               fi
             done
-
+            
             echo "false"
           }
 
@@ -470,7 +470,7 @@ jobs:
 
       - name: Get container tools in UBI builder
         run: |
-          dnf -y install podman buildah skopeo jq
+          dnf -y install podman buildah skopeo jq 
           dnf clean all
 
       - name: Register with Red Hat subscription manager
@@ -545,7 +545,7 @@ jobs:
 
       - name: Pull bootc image for artifact creation
         run: |
-          IMAGE="${{ env.DEST_REGISTRY_HOST }}/${{ env.DEST_REGISTRY_USER }}/bootc-${{ matrix.dir }}:${{ steps.version.outputs.version }}-${{ matrix.arch }}"
+          IMAGE="${{ env.DEST_REGISTRY_HOST }}/${{ env.DEST_REGISTRY_USER }}/bootc-${{ matrix.dir }}:latest-${{ matrix.arch }}"
           echo "Pulling bootc image: $IMAGE"
           podman pull "$IMAGE"
 
@@ -558,7 +558,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          IMAGE="${{ env.DEST_REGISTRY_HOST }}/${{ env.DEST_REGISTRY_USER }}/bootc-${{ matrix.dir }}:${{ steps.version.outputs.version }}-${{ matrix.arch }}"
+          IMAGE="${{ env.DEST_REGISTRY_HOST }}/${{ env.DEST_REGISTRY_USER }}/bootc-${{ matrix.dir }}:latest-${{ matrix.arch }}"
           mkdir -p output
 
           echo "Creating ${{ matrix.format }} artifact for $IMAGE"
@@ -602,7 +602,7 @@ jobs:
           set -euo pipefail
 
           ARTIFACT_IMAGE_NAME="${{ env.DEST_REGISTRY_USER }}/bootc-${{ matrix.dir }}-${{ matrix.format }}"
-          ARTIFACT_IMAGE_TAG="${{ steps.version.outputs.version }}-${{ matrix.arch }}"
+          ARTIFACT_IMAGE_TAG="latest-${{ matrix.arch }}"
 
           echo "Creating scratch image: $ARTIFACT_IMAGE_NAME:$ARTIFACT_IMAGE_TAG"
 
