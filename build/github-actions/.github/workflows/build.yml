@@ -113,25 +113,50 @@ jobs:
           check_existing_artifacts() {
             local image_base="$1"
             local artifact_formats="$2"
-            
+            local artifact_platforms="$3"
+
             # Check each artifact format separately
             IFS=',' read -ra FORMAT_ARRAY <<< "$artifact_formats"
-            
+            IFS=',' read -ra PLATFORM_ARRAY <<< "$artifact_platforms"
+
             for format in "${FORMAT_ARRAY[@]}"; do
               local artifact_image_base="${image_base}-${format}"
               local existing_tags=""
-              
+
               if skopeo list-tags "docker://${artifact_image_base}" >/tmp/check_tags_${format}.json 2>/dev/null; then
+                # Look for both version tags (v1, v2, etc.) AND latest-<arch> tags
                 existing_tags=$(jq -r '.Tags[]' /tmp/check_tags_${format}.json 2>/dev/null | \
-                  grep -E '^v[0-9]+(-[^-]+)?$' || echo "")
-                
+                  grep -E '^(v[0-9]+(-[^-]+)?|latest-[^-]+)$' || echo "")
+
                 if [ -n "$existing_tags" ]; then
-                  echo "true"
-                  return 0
+                  # For each required platform, check if there's either a latest-<arch> or v<N>-<arch> tag
+                  local all_platforms_found=true
+                  for platform in "${PLATFORM_ARRAY[@]}"; do
+                    local arch="${platform#linux/}"
+                    local platform_found=false
+
+                    # Check if we have either latest-<arch> or any version tag for this arch
+                    for tag in $existing_tags; do
+                      if [[ "$tag" == "latest-${arch}" ]] || [[ "$tag" == v*-"${arch}" ]]; then
+                        platform_found=true
+                        break
+                      fi
+                    done
+
+                    if [ "$platform_found" = false ]; then
+                      all_platforms_found=false
+                      break
+                    fi
+                  done
+
+                  if [ "$all_platforms_found" = true ]; then
+                    echo "true"
+                    return 0
+                  fi
                 fi
               fi
             done
-            
+
             echo "false"
           }
 
