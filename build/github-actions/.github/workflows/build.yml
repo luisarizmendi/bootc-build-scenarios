@@ -135,13 +135,31 @@ jobs:
             echo "false"
           }
 
-          # Detect changed top-level directories between the previous and current commit (push)
-          # and for workflow_dispatch, consider ALL top-level dirs that contain a Containerfile.
+          # Detect changed top-level directories
           if [ "${{ github.event_name }}" = "push" ]; then
             BEFORE="${{ github.event.before }}"
             AFTER="${{ github.sha }}"
             echo "Diff range: $BEFORE..$AFTER"
-            CHANGED_DIRS=$(git diff --name-status "$BEFORE" "$AFTER" | awk '{print $2}' | awk -F/ 'NF>1{print $1}' | sort -u)
+            
+            # Handle the case where BEFORE is the null SHA (initial commit or empty repository)
+            if [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || [ -z "$BEFORE" ]; then
+              echo "Detected initial commit or empty before SHA, using git ls-tree to find all files"
+              # For initial commit, get all files in the current commit
+              CHANGED_FILES=$(git ls-tree -r --name-only "$AFTER" 2>/dev/null || echo "")
+            else
+              # Normal case: get changed files between commits
+              CHANGED_FILES=$(git diff --name-only "$BEFORE" "$AFTER" 2>/dev/null || echo "")
+            fi
+            
+            echo "Changed files: $CHANGED_FILES"
+            
+            # Extract top-level directories from the changed files
+            if [ -n "$CHANGED_FILES" ]; then
+              # Use a more robust method to extract directories
+              CHANGED_DIRS=$(echo "$CHANGED_FILES" | grep -E '^[^/]+/' | cut -d'/' -f1 | sort -u || echo "")
+            else
+              CHANGED_DIRS=""
+            fi
           else
             # For manual runs, find all top-level dirs with a Containerfile
             CHANGED_DIRS=$(find . -maxdepth 2 -type f -name 'Containerfile' -printf '%h\n' | sed 's#^\./##' | awk -F/ '{print $1}' | sort -u)
@@ -232,7 +250,6 @@ jobs:
               CREATE_ARTIFACTS="${CONFIG_PARTS[0]}"
               ARTIFACT_FORMATS="${CONFIG_PARTS[1]:-$FORMATS}"
               ARTIFACT_PLATFORMS="${CONFIG_PARTS[2]}"
-
 
               echo "Directory $DIR artifact config - create: $CREATE_ARTIFACTS, formats: $ARTIFACT_FORMATS, platforms: $ARTIFACT_PLATFORMS"
 
