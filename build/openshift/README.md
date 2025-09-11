@@ -176,6 +176,18 @@ Once you configure the Webhook, try to make a change in the Containerfile and pu
 
 ## Extracting the installable artifact from the container image
 
-There are some specific tools that can extract files from container images, but you can also use standard container tooling for this task.
+There are some specific tools that can extract files from container images, but you can also use standard container tooling for this task:
 
-I've created a script that helps with that extraction process, [you can check it out here](../../tools/extract-oci-diskimage/). This script simplifies the process of getting your installable artifacts out of the container image format and onto your local filesystem for deployment.
+```bash
+mkdir artifacts
+podman create --name temp-container ghcr.io/{owner}/bootc-{directory}-{format}:{label}
+podman cp temp-container:/ ./artifacts/
+podman rm temp-container
+podman rmi ghcr.io/{owner}/bootc-{directory}-{format}:{label}
+
+# The installable files will be in ./artifacts/
+ls -la artifacts/
+```
+
+
+I've also created a script that helps with that extraction process, [you can check it out here](../../tools/extract-oci-diskimage/). This script simplifies the process of getting your installable artifacts out of the container image format and onto your local filesystem for deployment.
