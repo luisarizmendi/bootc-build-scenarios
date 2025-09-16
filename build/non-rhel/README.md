@@ -2,6 +2,8 @@
 
 Building `bootc` images from non-RHEL base images (such as CentOS Stream, Fedora, or other distributions) requires special handling when you need access to RHEL repositories and packages. Since these base images cannot be directly subscribed to Red Hat, you must obtain and use Red Hat entitlement files.
 
+**Note:** There is an even simplier way to build RHEL bootc images in Fedora, you can install the `subscription-manager` package, register your Fedora system (as if it was a RHEL machine) and use the same bootc build procedure than in RHEL nodes.
+
 ## Prerequisites
 
 - **Active Red Hat subscription** (required for accessing RHEL repositories)
